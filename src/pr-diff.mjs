@@ -81,6 +81,35 @@ export async function prDiff({
   const changedFiles = await getChangedFiles(baseRef);
   const explained = explainReport(report, changedFiles);
 
+  // Semantic HTML-snapshot diff: attach added/removed visible lines per screen.
+  const { attachHtmlDiffs } = await import('./html-diff.mjs');
+  await attachHtmlDiffs(explained, base.baseDir, headDir);
+
+  // Draw boxes around changed regions on the AFTER image (readable, unlike the
+  // raw overlay under layout shifts). Failures degrade to the plain head image.
+  try {
+    const { annotatePng } = await import('./annotate.mjs');
+    const { mkdir } = await import('node:fs/promises');
+    const { join, basename } = await import('node:path');
+    const annDir = join(process.env.RUNNER_TEMP || '/tmp', 'vp-annotated');
+    await mkdir(annDir, { recursive: true });
+    for (const r of explained) {
+      if (r.status !== 'changed' || !r.bbox || !r.head?.png) continue;
+      const src = join(headDir, String(r.head.png).replace(/^\.\//, ''));
+      const name = `${String(r.key).replace(/[^a-zA-Z0-9._-]+/g, '__')}.annotated.png`;
+      const dest = join(annDir, name);
+      try {
+        annotatePng(src, dest, [r.bbox]);
+        r.annotatedPng = dest;
+        r.annotatedPngName = name;
+      } catch (e) {
+        console.warn(`[annotate] ${r.key}: ${e.message} — falling back to the plain After image`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[annotate] disabled: ${e.message}`);
+  }
+
   const touched = report.summary.added + report.summary.removed + report.summary.changed + report.summary.failed;
   await setOutput('changed-count', String(report.summary.changed));
 

@@ -100,6 +100,8 @@ export function makeImageUploader({
       if (r.base?.png) await copyInto(join(baseDir, strip(r.base.png)), join(prDir, 'base', strip(r.base.png)));
       if (r.head?.png) await copyInto(join(headDir, strip(r.head.png)), join(prDir, 'head', strip(r.head.png)));
       if (r.diffPng && r.diffPngName) await copyInto(r.diffPng, join(prDir, 'diff', r.diffPngName));
+      if (r.annotatedPng && r.annotatedPngName)
+        await copyInto(r.annotatedPng, join(prDir, 'annotated', r.annotatedPngName));
     }
 
     git(['-C', wt, 'add', '-A']);

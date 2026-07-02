@@ -48,27 +48,57 @@ export function renderComment({ report, explained, urlFor, galleryUrl, headSha, 
     );
   }
 
-  for (const r of explained) {
+  // Screens are rendered EXPANDED: reviewers must see the changes without
+  // hunting for a disclosure arrow. <details open> keeps them collapsible for
+  // long comments; beyond OPEN_LIMIT screens the rest start collapsed.
+  const OPEN_LIMIT = 6;
+  explained.forEach((r, idx) => {
     const title = `${statusEmoji(r.status)} \`${r.key}\``;
-    lines.push('', `<details><summary>${title} — ${r.status}</summary>`, '');
+    const open = idx < OPEN_LIMIT ? ' open' : '';
+    lines.push('', `<details${open}><summary>${title} — ${r.status}</summary>`, '');
     lines.push(r.explanation, '');
 
-    // Image block: before | after | diff, whichever exist.
+    // Semantic diff of the HTML snapshots: what appeared / disappeared, in
+    // words — readable even when the pixel change is just a layout shift, and
+    // the way added/removed functionality shows up.
+    const hc = r.htmlChanges;
+    if (hc && (hc.added.length || hc.removed.length)) {
+      const CAP = 8;
+      lines.push('**What changed on the screen:**', '');
+      for (const l of hc.added.slice(0, CAP)) lines.push(`- ➕ \`${escapeMd(l)}\``);
+      if (hc.added.length > CAP) lines.push(`- ➕ …and ${hc.added.length - CAP} more added`);
+      for (const l of hc.removed.slice(0, CAP)) lines.push(`- ➖ \`${escapeMd(l)}\``);
+      if (hc.removed.length > CAP) lines.push(`- ➖ …and ${hc.removed.length - CAP} more removed`);
+      lines.push('');
+    }
+
+    // Image block: Before | After. "After" carries drawn boxes around the
+    // changed regions when available — far more readable than the raw pixel
+    // overlay, which turns layout shifts into red soup. The raw overlay stays
+    // reachable as a link for the curious.
     const baseUrl = r.base ? urlFor(joinDir('base', r.base.png)) : null;
+    const annUrl = r.annotatedPngName ? urlFor(`annotated/${r.annotatedPngName}`) : null;
     const headUrl = r.head ? urlFor(joinDir('head', r.head.png)) : null;
+    const afterUrl = annUrl ?? headUrl;
     const diffUrl = r.diffPngName ? urlFor(`diff/${r.diffPngName}`) : null;
 
-    if (headUrl || baseUrl || diffUrl) {
-      lines.push('| ' + [baseUrl && 'Before', headUrl && 'After', diffUrl && 'Diff'].filter(Boolean).join(' | ') + ' |');
-      lines.push('|' + [baseUrl, headUrl, diffUrl].filter(Boolean).map(() => '---').join('|') + '|');
-      const cell = (u) => (u ? `<img src="${u}" width="260">` : '');
-      lines.push('| ' + [baseUrl && cell(baseUrl), headUrl && cell(headUrl), diffUrl && cell(diffUrl)].filter((x) => x !== false && x !== null).join(' | ') + ' |');
+    if (baseUrl || afterUrl) {
+      const headers = [baseUrl && 'Before', afterUrl && (annUrl ? 'After (changes boxed)' : 'After')].filter(Boolean);
+      lines.push(`| ${headers.join(' | ')} |`);
+      lines.push(`|${headers.map(() => '---').join('|')}|`);
+      const cell = (u) => `<img src="${u}" width="380">`;
+      lines.push(`| ${[baseUrl, afterUrl].filter(Boolean).map(cell).join(' | ')} |`);
     }
+    if (diffUrl) lines.push('', `<sub>[raw pixel diff](${diffUrl})</sub>`);
     lines.push('', '</details>');
-  }
+  });
 
   if (galleryUrl) lines.push('', `[Full gallery →](${galleryUrl})`);
   return lines.join('\n');
+}
+
+function escapeMd(s) {
+  return String(s).replace(/`/g, "'").replace(/\|/g, '/').slice(0, 160);
 }
 
 // PNG paths in the manifest are relative to the gallery dir; images are uploaded
