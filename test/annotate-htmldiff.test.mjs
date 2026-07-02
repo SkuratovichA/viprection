@@ -53,3 +53,11 @@ test('attachHtmlDiffs decorates changed screens from snapshot files', async () =
   assert.deepEqual(explained[0].htmlChanges.added, ['Email sender not connected']);
   assert.equal(explained[1].htmlChanges, undefined);
 });
+
+test('digit-only differences pair off as noise; real changes survive', () => {
+  const base = '<div>loadedAt: 1783014227000</div><div>Old feature</div>';
+  const head = '<div>loadedAt: 1783016593000</div><div>New feature</div>';
+  const { added, removed } = htmlDiff(base, head);
+  assert.deepEqual(added, ['New feature']);
+  assert.deepEqual(removed, ['Old feature']);
+});

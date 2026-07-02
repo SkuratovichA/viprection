@@ -66,7 +66,34 @@ export function htmlDiff(baseHtml, headHtml) {
     const delta = n - (head.get(line) ?? 0);
     for (let i = 0; i < delta; i++) removed.push(line);
   }
-  return { added, removed };
+  return pairOffNumericNoise(added, removed);
+}
+
+/**
+ * Drop added/removed pairs that differ ONLY in digits (timestamps, counters,
+ * generated ids): "loadedAt: 1783016593000" vs "loadedAt: 1783014227000" is
+ * volatile noise, not a semantic change. A numeric line with no counterpart
+ * (a genuinely new metric block, say) is kept.
+ */
+function pairOffNumericNoise(added, removed) {
+  const norm = (l) => l.replace(/\d+/g, '#');
+  const removedPool = new Map(); // norm → indices into removed
+  removed.forEach((l, i) => {
+    const k = norm(l);
+    if (!removedPool.has(k)) removedPool.set(k, []);
+    removedPool.get(k).push(i);
+  });
+  const dropRemoved = new Set();
+  const keptAdded = [];
+  for (const l of added) {
+    const pool = removedPool.get(norm(l));
+    if (pool && pool.length && norm(l) !== l) {
+      dropRemoved.add(pool.shift()); // paired: numeric-only difference
+    } else {
+      keptAdded.push(l);
+    }
+  }
+  return { added: keptAdded, removed: removed.filter((_, i) => !dropRemoved.has(i)) };
 }
 
 /**
