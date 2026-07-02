@@ -43,8 +43,11 @@ export async function browserVersion() {
       const v = execFileSync(bin, ['--version'], { encoding: 'utf8' }).trim();
       if (v) return v;
     } catch {
-      /* try next */
+      /* try next candidate */
     }
   }
+  // Not silently: 'unknown' feeds the base-reuse version guard — surface it so a
+  // spurious capture-base (or a masked mismatch) is diagnosable.
+  console.warn('[versions] no browser found for version fingerprint; using "unknown"');
   return 'unknown';
 }

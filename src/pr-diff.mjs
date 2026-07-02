@@ -28,7 +28,10 @@ async function getChangedFiles(baseRef) {
     return execFileSync('git', ['diff', '--name-only', range], { encoding: 'utf8' })
       .split('\n')
       .filter(Boolean);
-  } catch {
+  } catch (e) {
+    // Never silently: a lost changed-file list degrades the "related files"
+    // attribution in the comment — worth a warning so it's diagnosable.
+    console.warn(`[pr-diff] could not compute changed files (${e.message.split('\n')[0]}); related-file hints disabled`);
     return [];
   }
 }
