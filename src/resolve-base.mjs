@@ -30,6 +30,23 @@ import { execFileSync } from 'node:child_process';
 import { globMatch } from './glob.mjs';
 import { toolVersion, browserVersion } from './versions.mjs';
 
+/**
+ * True when two browser version strings share the same MAJOR.MINOR series
+ * (e.g. "Google Chrome 149.0.7827.200" vs "... 149.0.7827.155" → true;
+ * 149.x vs 150.x → false). Falls back to exact comparison when no version
+ * number can be extracted.
+ */
+export function browserSeriesMatch(a, b) {
+  const series = (v) => {
+    const m = /(\d+)\.(\d+)/.exec(String(v ?? ''));
+    return m ? `${m[1]}.${m[2]}` : null;
+  };
+  const sa = series(a);
+  const sb = series(b);
+  if (sa === null || sb === null) return String(a) === String(b);
+  return sa === sb;
+}
+
 function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
@@ -96,11 +113,24 @@ export async function resolveBase({
     tool: await toolVersion(config),
     browser: await browserVersion(),
   };
-  if (meta.toolVersion !== current.tool || meta.browserVersion !== current.browser) {
+  // Tool version must match exactly (a capture-tool change invalidates pixel
+  // comparability). Browser matches on MAJOR.MINOR only: GitHub runner pools
+  // roll Chrome PATCH versions independently (e.g. 149.0.7827.200 vs .155), so
+  // an exact match would defeat reuse on almost every run — and patch-level
+  // rendering drift is what the pixelmatch threshold + changed-ratio gate
+  // already absorb.
+  if (meta.toolVersion !== current.tool) {
     return {
       mode: 'capture-base',
       baseDir: freshBaseDir,
-      reason: `version mismatch (published tool=${meta.toolVersion} browser=${meta.browserVersion}, current tool=${current.tool} browser=${current.browser})`,
+      reason: `tool version mismatch (published ${meta.toolVersion}, current ${current.tool})`,
+    };
+  }
+  if (!browserSeriesMatch(meta.browserVersion, current.browser)) {
+    return {
+      mode: 'capture-base',
+      baseDir: freshBaseDir,
+      reason: `browser series mismatch (published ${meta.browserVersion}, current ${current.browser})`,
     };
   }
 

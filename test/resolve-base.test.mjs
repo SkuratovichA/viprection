@@ -139,3 +139,34 @@ test('unknown SHA in meta degrades safely → capture-base', async () => {
   const r = await resolveBase({ ...baseArgs(repo, meta), mergeBaseSha: repo.c2 });
   assert.equal(r.mode, 'capture-base');
 });
+
+test('browser PATCH drift across runners does not break reuse (series match)', async () => {
+  const repo = await makeRepo();
+  const meta = await writeMeta(repo.dir, {
+    capturedAtSha: repo.c3,
+    toolVersion: VERSIONS.tool,
+    browserVersion: 'Google Chrome 149.0.7827.200',
+  });
+  const r = await resolveBase({
+    ...baseArgs(repo, meta),
+    mergeBaseSha: repo.c3,
+    currentVersions: { tool: VERSIONS.tool, browser: 'Google Chrome 149.0.7827.155' },
+  });
+  assert.equal(r.mode, 'reuse'); // same 149.0 series → patch drift tolerated
+});
+
+test('browser MAJOR bump still forces capture-base', async () => {
+  const repo = await makeRepo();
+  const meta = await writeMeta(repo.dir, {
+    capturedAtSha: repo.c3,
+    toolVersion: VERSIONS.tool,
+    browserVersion: 'Google Chrome 149.0.7827.200',
+  });
+  const r = await resolveBase({
+    ...baseArgs(repo, meta),
+    mergeBaseSha: repo.c3,
+    currentVersions: { tool: VERSIONS.tool, browser: 'Google Chrome 150.0.8001.10' },
+  });
+  assert.equal(r.mode, 'capture-base');
+  assert.match(r.reason, /browser series mismatch/);
+});
