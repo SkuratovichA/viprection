@@ -105,7 +105,13 @@ export function makeImageUploader({
     let changed = true;
     try { git(['-C', wt, 'diff', '--cached', '--quiet']); changed = false; } catch { /* has changes */ }
     if (changed) {
-      git(['-C', wt, 'commit', '-m', `preview(pr-${prNumber}): diff images`]);
+      git([
+        '-C', wt,
+        // CI runners ship no git identity (same fix as publish.mjs).
+        '-c', 'user.name=github-actions[bot]',
+        '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+        'commit', '-m', `preview(pr-${prNumber}): diff images`,
+      ]);
       git(['-C', wt, 'push', 'origin', `HEAD:${pagesBranch}`]);
     }
 
