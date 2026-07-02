@@ -124,10 +124,15 @@ export function makeImageUploader({
     // raw URLs when Pages is unavailable.
     let base = `${serverRawUrl}/${owner}/${name}/${pagesBranch}`;
     try {
-      const pages = await gh(`/repos/${repo}/pages`, { token });
-      if (pages?.html_url) base = pages.html_url.replace(/\/$/, '');
+      // The plain repo GET is readable with ANY GITHUB_TOKEN (metadata scope is
+      // implicit) — unlike GET /pages, which needs a pages permission the job
+      // may not have. has_pages tells us the site exists; project sites live at
+      // the derivable owner.github.io/name URL (custom domains are rare enough
+      // to accept the default here).
+      const meta = await gh(`/repos/${repo}`, { token });
+      if (meta?.has_pages) base = `https://${owner}.github.io/${name}`;
     } catch {
-      // Pages not enabled — keep the raw fallback (works for public repos).
+      // Metadata unavailable — keep the raw fallback (works for public repos).
     }
     return (localRel) => `${base}/pr-${prNumber}/${localRel}`;
   };
