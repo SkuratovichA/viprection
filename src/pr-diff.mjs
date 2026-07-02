@@ -130,7 +130,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const { makeCommentPoster, makeImageUploader } = await import('./github.mjs');
       postComment = makeCommentPoster({ repo, prNumber, token });
       uploadImages = makeImageUploader({
-        repo, prNumber, pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
+        repo, prNumber, token, pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
       });
     }
     return prDiff({ postComment, uploadImages, isFork });

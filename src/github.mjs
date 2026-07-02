@@ -71,7 +71,7 @@ export function makeImageUploader({
   repo, prNumber, pagesBranch = 'previews',
   serverRawUrl = 'https://raw.githubusercontent.com',
   workRoot = process.env.RUNNER_TEMP || '/tmp',
-  token = process.env.GITHUB_TOKEN,
+  token = process.env.VP_GITHUB_TOKEN || process.env.GITHUB_TOKEN,
 }) {
   return async function uploadImages(explained, headDir, baseDir) {
     const wt = join(workRoot, 'vp-pr-images');
@@ -131,8 +131,10 @@ export function makeImageUploader({
       // to accept the default here).
       const meta = await gh(`/repos/${repo}`, { token });
       if (meta?.has_pages) base = `https://${owner}.github.io/${name}`;
-    } catch {
-      // Metadata unavailable — keep the raw fallback (works for public repos).
+    } catch (e) {
+      // Keep the raw fallback (fine for public repos) — but never silently:
+      // three of the first live bugs hid behind silent fallbacks.
+      console.warn(`[pr-images] Pages detection failed (${e.message}); using raw URLs`);
     }
     return (localRel) => `${base}/pr-${prNumber}/${localRel}`;
   };
