@@ -44,6 +44,14 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # 0. Install the ACTION's own runtime deps (pixelmatch/pngjs) into the action
+    #    dir — a composite action ships source, not node_modules. Kept out of the
+    #    consumer's tree.
+    - shell: bash
+      run: |
+        cd "$GITHUB_ACTION_PATH"
+        npm ci --omit=dev --no-audit --no-fund || npm install --omit=dev --no-audit --no-fund
+
     # 1. Validate config + decide whether to run at all (uiGlobs gate).
     - id: gate
       shell: bash
