@@ -15,6 +15,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
+import { htmlPrefilter } from './html-prefilter.mjs';
 
 /**
  * @typedef {Object} ScreenRef
@@ -157,6 +158,21 @@ export async function compareGalleries({ baseDir, headDir, diffDir, diffOptions 
       results.push({ key, status: 'failed', head, base, failureReason: head.failureReason ?? base.failureReason });
       continue;
     }
+
+    // HTML fast pre-filter: if the self-contained snapshots are byte-identical
+    // (normalized), skip the pixelmatch entirely. Never a "changed" signal —
+    // only a confident skip. (Disable via diffOptions.htmlPrefilter === false.)
+    if (diffOptions.htmlPrefilter !== false && base.html && head.html) {
+      const verdict = await htmlPrefilter(
+        join(baseDir, base.html.replace(/^\.\//, '')),
+        join(headDir, head.html.replace(/^\.\//, ''))
+      );
+      if (verdict === 'skip') {
+        results.push({ key, status: 'unchanged', head, base, diffRatio: 0, prefiltered: true });
+        continue;
+      }
+    }
+
     const d = await diffScreen({
       basePng: join(baseDir, base.png.replace(/^\.\//, '')),
       headPng: join(headDir, head.png.replace(/^\.\//, '')),
@@ -167,7 +183,9 @@ export async function compareGalleries({ baseDir, headDir, diffDir, diffOptions 
     });
     results.push({
       key, status: d.changed ? 'changed' : 'unchanged',
-      head, base, diffRatio: d.diffRatio, bbox: d.bbox, resized: d.resized, diffPng: d.diffPngPath,
+      head, base, diffRatio: d.diffRatio, bbox: d.bbox, resized: d.resized,
+      diffPng: d.diffPngPath, // absolute path (for upload)
+      diffPngName: d.diffPngPath ? `${key.replace(/\//g, '__')}.diff.png` : null, // name under diff/
     });
   }
 

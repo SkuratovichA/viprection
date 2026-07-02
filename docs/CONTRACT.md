@@ -83,6 +83,23 @@ toolVersion, browserVersion }`, used for base-capture reuse (see below).
   image (`ubuntu-24.04`, not `-latest`) and a fixed `deviceScaleFactor`.
 - Mask residual volatile UI via `diff.maskSelectors` / `ignoreRegions`.
 
+## HTML fast pre-filter (speed, no accuracy loss)
+
+If `capture` also emits the self-contained per-screen `.html` snapshots (via each
+screen's `html` field), the diff engine uses them as a **skip optimization**:
+when a screen's *normalized* HTML is byte-identical between base and head, its
+pixel-diff is skipped (marked unchanged, `prefiltered: true`). Pixel-diff remains
+the source of visual truth for every screen the pre-filter can't clear.
+
+Why this is safe (never a false "unchanged"):
+- `html-equal` → skip; `html-differs`/`html-missing` → fall through to pixel-diff.
+- Snapshots inline same-origin images as data-URIs and inline all CSS/`<style>`,
+  so an asset swap or CSS-variable change *also* changes the HTML → still diffed.
+- Only the injected `<base href>` (volatile dev port) and whitespace-between-tags
+  are normalized away; class names and inline styles are kept (they're visual).
+- Gap: cross-origin assets can change without changing the HTML — rare; disable
+  with `diff.htmlPrefilter: false` if your app depends on them heavily.
+
 ## Base-capture reuse (PR mode)
 
 To avoid capturing the whole catalog twice per PR, the published per-branch

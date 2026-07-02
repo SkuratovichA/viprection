@@ -125,6 +125,7 @@ export const CONFIG_JSON_SCHEMA = {
       properties: {
         threshold: { type: 'number' },
         changedRatioGate: { type: 'number' },
+        htmlPrefilter: { type: 'boolean' },
         ignoreScreens: { type: 'array', items: { type: 'string' } },
         maskSelectors: {
           type: 'object',
