@@ -47,6 +47,9 @@ outputs:
   gallery-url:
     description: 'URL of the published/updated gallery'
     value: ${{ steps.publish.outputs.url }}
+  image-artifact-dir:
+    description: 'Dir of staged diff images to upload as an artifact (imageHosting=artifact)'
+    value: ${{ steps.diff.outputs.image-artifact-dir }}
 
 runs:
   using: 'composite'
