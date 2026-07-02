@@ -46,9 +46,13 @@ Puppeteer catalog scripts already do, or need a tiny adapter.
 
 ## Status
 
-Early. Contract v1 is frozen ([docs/CONTRACT.md](docs/CONTRACT.md)); the config
-schema, change-gating and the image-diff engine are implemented and tested. Stack
-orchestration, PR comment rendering and Pages publishing are in progress.
+Contract v1 is frozen ([docs/CONTRACT.md](docs/CONTRACT.md)). All the moving
+parts are implemented and unit-tested (27 tests): config schema + validation,
+change-gating, image-diff (with the HTML pre-filter), base-gallery resolution
+with the staleness guard, the "what changed" explanation, PR sticky-comment
+rendering + GitHub upsert, stack orchestration (up/healthchecks/seed/capture/
+down), the frozen clock, and per-branch Pages publishing. Next: a real end-to-end
+run on a live repo + adoption docs.
 
 ## Layout
 

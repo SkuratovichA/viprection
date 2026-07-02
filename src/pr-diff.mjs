@@ -15,25 +15,11 @@
  * dir the caller provides via VP_BASE_DIR.
  */
 import { readFile, appendFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareGalleries } from './image-diff.mjs';
 import { explainReport } from './explain.mjs';
 import { renderComment, MARKER } from './comment.mjs';
-
-/**
- * SEAM: replaced by salon-reach's change-gate.resolveBase(). Contract:
- *   in : { config, mergeBaseSha, publishedMetaPath, publishedDir, freshBaseDir }
- *   out: { mode: 'reuse'|'capture-base', baseDir }
- * Stub: prefer an explicitly provided fresh base dir; else the published dir.
- */
-async function resolveBaseStub({ publishedDir, freshBaseDir }) {
-  if (freshBaseDir && existsSync(join(freshBaseDir, 'manifest.json')))
-    return { mode: 'capture-base', baseDir: freshBaseDir };
-  if (publishedDir && existsSync(join(publishedDir, 'manifest.json')))
-    return { mode: 'reuse', baseDir: publishedDir };
-  return { mode: 'none', baseDir: null };
-}
+import { resolveBase as resolveBaseImpl } from './resolve-base.mjs';
 
 async function getChangedFiles(baseRef) {
   try {
@@ -49,7 +35,7 @@ async function getChangedFiles(baseRef) {
 
 export async function prDiff({
   configPath = process.env.VP_CONFIG_PATH || 'visual-preview.config.json',
-  resolveBase = resolveBaseStub,
+  resolveBase = resolveBaseImpl, // salon-reach's real staleness-guarded resolver
   postComment, // injected by the caller (github api); if absent → summary only
   uploadImages, // injected: (changedResults, headDir, baseDir) => urlFor(localPath)
   isFork = process.env.VP_IS_FORK === 'true',
@@ -123,7 +109,23 @@ async function setOutput(key, value) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  prDiff().catch((e) => {
+  // Wire the real GitHub API for same-repo runs; forks (read-only token) get the
+  // job-summary path only.
+  (async () => {
+    const isFork = process.env.VP_IS_FORK === 'true';
+    const token = process.env.VP_GITHUB_TOKEN;
+    const repo = process.env.GITHUB_REPOSITORY;
+    const prNumber = process.env.VP_PR_NUMBER;
+    let postComment, uploadImages;
+    if (!isFork && token && repo && prNumber) {
+      const { makeCommentPoster, makeImageUploader } = await import('./github.mjs');
+      postComment = makeCommentPoster({ repo, prNumber, token });
+      uploadImages = makeImageUploader({
+        repo, prNumber, pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
+      });
+    }
+    return prDiff({ postComment, uploadImages, isFork });
+  })().catch((e) => {
     console.error(e);
     process.exit(1);
   });
