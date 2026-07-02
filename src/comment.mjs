@@ -22,7 +22,7 @@ function statusEmoji(s) {
  * @param {boolean} [p.readOnly]   fork mode → note that this is a summary only
  * @returns {string} markdown
  */
-export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly }) {
+export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly, coverage }) {
   const { summary } = report;
   const totalTouched = summary.added + summary.removed + summary.changed + summary.failed;
 
@@ -93,8 +93,43 @@ export function renderComment({ report, explained, urlFor, galleryUrl, headSha, 
     lines.push('', '</details>');
   });
 
+  renderCoverage(lines, { explained, coverage });
+
   if (galleryUrl) lines.push('', `[Full gallery →](${galleryUrl})`);
   return lines.join('\n');
+}
+
+/**
+ * Deterministic, zero-cost coverage nag (the no-LLM alternative to an agentic
+ * enrichment bot): tell the PR author exactly what the visual layer could NOT
+ * see, so gaps get fixed as part of the PR instead of rotting silently.
+ */
+function renderCoverage(lines, { explained, coverage }) {
+  if (!coverage) return;
+  const { uncoveredChangedFiles = [], autoScreens = [], paramRoutes = [] } = coverage;
+  if (!uncoveredChangedFiles.length && !autoScreens.length && !paramRoutes.length) return;
+
+  lines.push('', '### 🧭 Coverage', '');
+  if (uncoveredChangedFiles.length) {
+    lines.push(
+      `⚠️ **${uncoveredChangedFiles.length} changed UI file(s) matched no captured screen** — their visual effect may be untested. Consider a catalog entry or a state walker:`
+    );
+    for (const f of uncoveredChangedFiles.slice(0, 8)) lines.push(`- \`${f}\``);
+    if (uncoveredChangedFiles.length > 8) lines.push(`- …and ${uncoveredChangedFiles.length - 8} more`);
+    lines.push('');
+  }
+  if (autoScreens.length) {
+    lines.push(
+      `📝 **${autoScreens.length} screen(s) are auto-covered but undocumented** — add a catalog entry (caption/details) to enrich: ${autoScreens.slice(0, 6).map((s) => `\`${s}\``).join(', ')}${autoScreens.length > 6 ? ', …' : ''}`
+    );
+    lines.push('');
+  }
+  if (paramRoutes.length) {
+    lines.push(
+      `🧩 **${paramRoutes.length} parameterized route(s) need fixtures** to be captured at all: ${paramRoutes.slice(0, 6).map((s) => `\`${s}\``).join(', ')}`
+    );
+    lines.push('');
+  }
 }
 
 function escapeMd(s) {

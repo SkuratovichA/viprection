@@ -118,6 +118,31 @@ export async function prDiff({
     ? await uploadImages(explained, headDir, base.baseDir)
     : () => null;
 
+  // Coverage nag inputs (all deterministic, no LLM): what the visual layer
+  // could not see on this PR.
+  const { globMatch } = await import('./glob.mjs');
+  const { readFile: rf } = await import('node:fs/promises');
+  const { join: pj } = await import('node:path');
+  let coverage;
+  try {
+    const headManifest = JSON.parse(await rf(pj(headDir, 'manifest.json'), 'utf8'));
+    const screens = (headManifest.sections ?? []).flatMap((sec) =>
+      (sec.screens ?? []).map((sc) => ({ ...sc, sectionId: sec.id }))
+    );
+    const autoScreens = screens
+      .filter((sc) => String(sc.name).startsWith('auto--') || /auto-discovered/i.test(sc.caption ?? ''))
+      .map((sc) => sc.route || sc.name);
+    const paramRoutes = screens
+      .filter((sc) => sc.sectionId === 'needs-attention')
+      .map((sc) => sc.route || sc.name);
+    const uiFiles = (changedFiles ?? []).filter((f) => (cfg.uiGlobs ?? []).some((g) => globMatch(g, f)));
+    const seen = new Set(explained.flatMap((r) => r.relatedFiles ?? []));
+    const uncoveredChangedFiles = uiFiles.filter((f) => !seen.has(f));
+    coverage = { uncoveredChangedFiles, autoScreens, paramRoutes };
+  } catch (e) {
+    console.warn(`[coverage] skipped: ${e.message}`);
+  }
+
   const md = renderComment({
     report,
     explained,
@@ -125,6 +150,7 @@ export async function prDiff({
     galleryUrl: process.env.VP_GALLERY_URL,
     headSha: process.env.GITHUB_SHA,
     readOnly: isFork || !postComment,
+    coverage,
   });
 
   // Always write the job summary (works on forks too).

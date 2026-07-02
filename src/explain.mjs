@@ -77,6 +77,7 @@ export function explainScreen(r, changedFiles) {
       bits.push(`${pct(r.diffRatio)} of pixels differ`);
       if (r.bbox) bits.push(`region ~${r.bbox.w}×${r.bbox.h}px at (${r.bbox.x},${r.bbox.y})`);
       const rel = relatedFiles(r, changedFiles);
+      r.relatedFiles = rel; // structured, for coverage reporting downstream
       const relNote = rel.length ? ` — likely related to ${rel.map((f) => `\`${f}\``).join(', ')}` : '';
       return `${bits.join(', ')}${relNote}.`;
     }

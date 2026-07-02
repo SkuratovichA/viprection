@@ -61,3 +61,27 @@ test('digit-only differences pair off as noise; real changes survive', () => {
   assert.deepEqual(added, ['New feature']);
   assert.deepEqual(removed, ['Old feature']);
 });
+
+test('coverage section renders nags and stays absent when empty', async () => {
+  const { renderComment } = await import('../src/comment.mjs');
+  const base = {
+    report: { summary: { added: 0, removed: 0, changed: 1, failed: 0, unchanged: 3 } },
+    explained: [{ key: 'a/b', status: 'changed', explanation: 'x', relatedFiles: ['src/covered.tsx'] }],
+    urlFor: () => null,
+  };
+  const withCov = renderComment({
+    ...base,
+    coverage: {
+      uncoveredChangedFiles: ['src/mystery.tsx'],
+      autoScreens: ['/new-route'],
+      paramRoutes: ['/orders/$id'],
+    },
+  });
+  assert.match(withCov, /🧭 Coverage/);
+  assert.match(withCov, /mystery\.tsx/);
+  assert.match(withCov, /auto-covered but undocumented/);
+  assert.match(withCov, /need fixtures/);
+
+  const noCov = renderComment({ ...base, coverage: { uncoveredChangedFiles: [], autoScreens: [], paramRoutes: [] } });
+  assert.ok(!noCov.includes('🧭 Coverage'));
+});
