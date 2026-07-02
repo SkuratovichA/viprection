@@ -142,6 +142,28 @@ export function makeImageUploader({
   };
 }
 
+/**
+ * Artifact image "uploader": instead of pushing to a public Pages/previews
+ * branch, copy the changed screens' images into a local dir the workflow uploads
+ * as a run artifact (nothing served publicly). urlFor returns null → the comment
+ * shows no inline images but links to the artifact. For private repos that don't
+ * want a public Pages site (user's choice on trips-auctions).
+ *
+ * @returns {Promise<(p:string)=>null>}  (always null; images live in the artifact)
+ */
+export function makeArtifactImageStager({ stageDir }) {
+  return async function stageImages(explained, headDir, baseDir) {
+    const strip = (p) => String(p).replace(/^\.\//, '');
+    for (const r of explained) {
+      if (r.base?.png) await copyInto(join(baseDir, strip(r.base.png)), join(stageDir, 'base', strip(r.base.png)));
+      if (r.head?.png) await copyInto(join(headDir, strip(r.head.png)), join(stageDir, 'head', strip(r.head.png)));
+      if (r.diffPng && r.diffPngName) await copyInto(r.diffPng, join(stageDir, 'diff', r.diffPngName));
+      if (r.annotatedPng && r.annotatedPngName) await copyInto(r.annotatedPng, join(stageDir, 'annotated', r.annotatedPngName));
+    }
+    return () => null; // no inline URLs; images are in the uploaded artifact
+  };
+}
+
 async function copyInto(src, dest) {
   await mkdir(join(dest, '..'), { recursive: true });
   await cp(src, dest);

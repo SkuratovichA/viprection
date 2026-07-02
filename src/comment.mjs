@@ -22,7 +22,7 @@ function statusEmoji(s) {
  * @param {boolean} [p.readOnly]   fork mode → note that this is a summary only
  * @returns {string} markdown
  */
-export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly, coverage }) {
+export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly, coverage, artifactNote }) {
   const { summary } = report;
   const totalTouched = summary.added + summary.removed + summary.changed + summary.failed;
 
@@ -45,6 +45,12 @@ export function renderComment({ report, explained, urlFor, galleryUrl, headSha, 
     lines.push(
       '',
       '> ℹ️ Fork PR — read-only run. Images are in the workflow artifact; a maintainer can re-run with the `visual-diff-approved` label for inline previews.'
+    );
+  }
+  if (artifactNote) {
+    lines.push(
+      '',
+      `> 📎 Before/after/diff images are attached to this run as the **visual-diff-images** artifact — [download from the run](${artifactNote}). (Inline previews are off for this private repo.)`
     );
   }
 

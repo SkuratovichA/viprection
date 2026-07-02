@@ -42,6 +42,7 @@ export async function prDiff({
   postComment, // injected by the caller (github api); if absent → summary only
   uploadImages, // injected: (changedResults, headDir, baseDir) => urlFor(localPath)
   isFork = process.env.VP_IS_FORK === 'true',
+  artifactMode = false, // true → images are in a run artifact, not inline
 } = {}) {
   const cfg = JSON.parse(await readFile(configPath, 'utf8'));
   const headDir = cfg.outputDir;
@@ -143,6 +144,12 @@ export async function prDiff({
     console.warn(`[coverage] skipped: ${e.message}`);
   }
 
+  // In artifact mode the run URL points reviewers at the uploaded images.
+  const runUrl =
+    process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+      ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+      : null;
+
   const md = renderComment({
     report,
     explained,
@@ -151,6 +158,7 @@ export async function prDiff({
     headSha: process.env.GITHUB_SHA,
     readOnly: isFork || !postComment,
     coverage,
+    artifactNote: artifactMode && touched > 0 ? runUrl : null,
   });
 
   // Always write the job summary (works on forks too).
@@ -183,15 +191,28 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const token = process.env.VP_GITHUB_TOKEN;
     const repo = process.env.GITHUB_REPOSITORY;
     const prNumber = process.env.VP_PR_NUMBER;
+    // Image hosting: 'artifact' → stage images for the workflow to upload (no
+    // public Pages site); else the default Pages/previews uploader.
+    const { readFile: rf } = await import('node:fs/promises');
+    const cfg = JSON.parse(await rf(process.env.VP_CONFIG_PATH || 'visual-preview.config.json', 'utf8'));
+    const artifactMode = cfg.imageHosting === 'artifact';
     let postComment, uploadImages;
     if (!isFork && token && repo && prNumber) {
-      const { makeCommentPoster, makeImageUploader } = await import('./github.mjs');
-      postComment = makeCommentPoster({ repo, prNumber, token });
-      uploadImages = makeImageUploader({
-        repo, prNumber, token, pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
-      });
+      const gh = await import('./github.mjs');
+      postComment = gh.makeCommentPoster({ repo, prNumber, token });
+      if (artifactMode) {
+        const { join } = await import('node:path');
+        const stageDir = join(process.env.RUNNER_TEMP || '/tmp', 'vp-artifact-images');
+        uploadImages = gh.makeArtifactImageStager({ stageDir });
+        // Tell the workflow where to find the images to upload as an artifact.
+        await setOutput('image-artifact-dir', stageDir);
+      } else {
+        uploadImages = gh.makeImageUploader({
+          repo, prNumber, token, pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
+        });
+      }
     }
-    return prDiff({ postComment, uploadImages, isFork });
+    return prDiff({ postComment, uploadImages, isFork, artifactMode });
   })().catch((e) => {
     console.error(e);
     process.exit(1);

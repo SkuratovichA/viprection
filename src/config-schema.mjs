@@ -94,6 +94,12 @@ export const CONFIG_JSON_SCHEMA = {
     down: { type: 'string' },
     outputDir: { type: 'string' },
     nodeVersion: { type: 'string' },
+    // Where PR-comment diff images are hosted. "pages" (default): push to the
+    // Pages/previews branch and inline them (works on public repos, or private
+    // repos with Pages enabled). "artifact": upload as a workflow artifact and
+    // link to it — nothing is served publicly (use for private repos that don't
+    // want a public Pages site).
+    imageHosting: { enum: ['pages', 'artifact'] },
     uiGlobs: { type: 'array', items: { type: 'string' }, minItems: 1 },
     env: { type: 'object', additionalProperties: { type: 'string' } },
     healthchecks: {
