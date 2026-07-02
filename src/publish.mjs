@@ -109,7 +109,13 @@ export async function publish({
     return;
   }
   // Commit as the pushing actor; author identity is set by the workflow env.
-  git(['-C', wt, 'commit', '-m', `preview(${sourceBranch}): update gallery @ ${String(sha).slice(0, 7)}`]);
+  git([
+    '-C', wt,
+    // CI runners have no git identity configured; commit as the Actions bot.
+    '-c', 'user.name=github-actions[bot]',
+    '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+    'commit', '-m', `preview(${sourceBranch}): update gallery @ ${String(sha).slice(0, 7)}`,
+  ]);
   git(['-C', wt, 'push', 'origin', `HEAD:${pagesBranch}`]);
 
   const url = pagesUrl(repo, serverUrl, pagesBranch, sourceBranch);
