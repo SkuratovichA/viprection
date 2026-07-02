@@ -20,6 +20,9 @@ comment, Pages publish, orchestration).
 
   // Lifecycle commands. The action runs: up → (wait healthchecks) → seed →
   // capture → collect outputDir → down (always, even on failure).
+  "install": "pnpm install --frozen-lockfile",  // optional; only used to prepare
+                                                 // a FRESH base capture in a
+                                                 // detached merge-base worktree.
   "up": "docker compose -f docker-compose.preview.yml up -d",
   "seed": "pnpm --filter @app/server seed",        // optional
   "capture": "pnpm --filter @app/client capture:screens",

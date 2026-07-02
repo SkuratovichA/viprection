@@ -76,6 +76,9 @@ runs:
 
     # 4a. PR mode: fetch the published base gallery (or capture a fresh base),
     #     diff, and post the comment / step-summary.
+    #     NOTE (seam): prepare-base sets VP_MERGE_BASE_SHA / VP_PUBLISHED_DIR /
+    #     VP_PUBLISHED_META / VP_BASE_DIR (salon-reach). This step owns the
+    #     GitHub-context wiring (PR number, fork detection, gallery URL).
     - if: steps.gate.outputs.should-run == 'true' && inputs.mode == 'pr'
       id: diff
       shell: bash
@@ -86,6 +89,12 @@ runs:
         VP_COMMENT_MODE: ${{ inputs.comment-mode }}
         VP_SUMMARY_API_KEY: ${{ inputs.summary-api-key }}
         VP_GITHUB_TOKEN: ${{ inputs.github-token }}
+        VP_PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Fork ⇢ the PR head repo differs from the base repo. On a fork the token
+        # is read-only, so pr-diff falls back to the job-summary path.
+        VP_IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        # Best-effort link to the published base gallery for the base branch.
+        VP_GALLERY_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.pages-branch }}/${{ github.base_ref }}
 
     # 4b. Branch mode: publish/update the per-branch gallery to Pages.
     - if: steps.gate.outputs.should-run == 'true' && inputs.mode == 'branch'

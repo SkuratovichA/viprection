@@ -15,6 +15,11 @@
  *
  * @typedef {Object} VisualPreviewConfig
  * @property {string} [project]      Display name (defaults to repo name).
+ * @property {string} [install]      Optional: install dependencies. Used when the
+ *                                   action prepares a FRESH base capture in a
+ *                                   detached worktree of the merge-base (which has
+ *                                   no node_modules). Skipped when absent. e.g.
+ *                                   "pnpm install --frozen-lockfile".
  * @property {string} up             Command that boots the full stack (may start
  *                                   service-containers, servers, client). Runs
  *                                   detached; the action does not wait on it —
@@ -82,6 +87,7 @@ export const CONFIG_JSON_SCHEMA = {
   additionalProperties: false,
   properties: {
     project: { type: 'string' },
+    install: { type: 'string' },
     up: { type: 'string' },
     seed: { type: 'string' },
     capture: { type: 'string' },
