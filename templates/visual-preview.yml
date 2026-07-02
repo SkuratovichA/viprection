@@ -1,0 +1,64 @@
+# Drop this into .github/workflows/visual-preview.yml in your project.
+# The ONLY things to customize: the tracked branches below, and (once) add a
+# visual-preview.config.json at the repo root. Everything else is the action.
+#
+# Security model (do NOT change to pull_request_target — it would run untrusted
+# PR code with a write token = RCE):
+#   • push to a tracked branch → (re)publish that branch's gallery to Pages.
+#   • pull_request (same-repo)  → full experience: diff + sticky PR comment.
+#   • pull_request (fork)       → read-only: diff posted to the job summary +
+#                                 artifact; no comment/Pages push. A maintainer
+#                                 can re-run with elevated rights after review.
+name: Visual Preview
+
+on:
+  push:
+    branches: [dev, main] # ← tracked branches
+  pull_request:
+    branches: [dev, main] # ← tracked branches (base)
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: visual-preview-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- The build MUST pass before we spend time rendering. ----
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: echo "Replace with your real build (e.g. pnpm build). Must exit non-zero on failure."
+
+  branch-gallery:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # push to the previews branch
+      pages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: booses/visual-preview-action@v1 # ← pin a tag/SHA once published
+        with:
+          mode: branch
+
+  pr-diff:
+    needs: build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write # comment (no-op/ignored on forks)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: booses/visual-preview-action@v1
+        with:
+          mode: pr
+          # summary-api-key: ${{ secrets.VP_SUMMARY_API_KEY }}  # optional LLM summary

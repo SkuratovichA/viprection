@@ -1,0 +1,101 @@
+name: 'Visual Preview'
+description: >-
+  Per-branch visual gallery + PR visual-diff comments. Boots your app in CI
+  (command-based contract), captures a screenshot catalog, image-diffs base vs
+  head, and posts only the changed screens to the PR — plus publishes an
+  always-current gallery per tracked branch to GitHub Pages.
+author: 'trips-auctions ↔ salon-reach'
+
+# Inputs are intentionally minimal — everything app-specific lives in the
+# project's visual-preview.config.json (see README / config-schema.mjs).
+inputs:
+  config-path:
+    description: 'Path to the project visual-preview.config.json'
+    required: false
+    default: 'visual-preview.config.json'
+  mode:
+    description: 'branch | pr — branch: (re)publish the per-branch gallery. pr: diff head vs base and comment.'
+    required: true
+  pages-branch:
+    description: 'Orphan branch to publish galleries to'
+    required: false
+    default: 'previews'
+  comment-mode:
+    description: 'sticky (update one comment) | new (one per run)'
+    required: false
+    default: 'sticky'
+  summary-api-key:
+    description: 'Optional API key enabling the LLM change-summary step (non-blocking). Omit for mechanical-only.'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token for commenting / pushing to the pages branch. Read-only on forks.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  changed-count:
+    description: 'Number of screens that changed (pr mode)'
+    value: ${{ steps.diff.outputs.changed-count }}
+  gallery-url:
+    description: 'URL of the published/updated gallery'
+    value: ${{ steps.publish.outputs.url }}
+
+runs:
+  using: 'composite'
+  steps:
+    # 1. Validate config + decide whether to run at all (uiGlobs gate).
+    - id: gate
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/gate.mjs"
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+        VP_MODE: ${{ inputs.mode }}
+
+    # 2. Bring the app up (project's `up`), wait for healthchecks.
+    - if: steps.gate.outputs.should-run == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/stack.mjs" up
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+
+    # 3. Seed + capture the catalog (with the frozen clock epoch if enabled).
+    - if: steps.gate.outputs.should-run == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/capture.mjs" head
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+
+    # 4a. PR mode: fetch the published base gallery (or capture a fresh base),
+    #     diff, and post the comment / step-summary.
+    - if: steps.gate.outputs.should-run == 'true' && inputs.mode == 'pr'
+      id: diff
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/pr-diff.mjs"
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+        VP_PAGES_BRANCH: ${{ inputs.pages-branch }}
+        VP_COMMENT_MODE: ${{ inputs.comment-mode }}
+        VP_SUMMARY_API_KEY: ${{ inputs.summary-api-key }}
+        VP_GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    # 4b. Branch mode: publish/update the per-branch gallery to Pages.
+    - if: steps.gate.outputs.should-run == 'true' && inputs.mode == 'branch'
+      id: publish
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/publish.mjs"
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+        VP_PAGES_BRANCH: ${{ inputs.pages-branch }}
+        VP_GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    # 5. Always tear the stack down.
+    - if: always() && steps.gate.outputs.should-run == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/stack.mjs" down
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+
+branding:
+  icon: 'camera'
+  color: 'purple'

@@ -1,0 +1,14 @@
+{
+  "name": "visual-preview-action",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Plug-and-play GitHub Action: per-branch visual gallery + PR visual-diff comments.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pixelmatch": "^6.0.0",
+    "pngjs": "^7.0.0"
+  }
+}

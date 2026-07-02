@@ -1,0 +1,38 @@
+{
+  "project": "Busano",
+  "up": "docker compose -f docker-compose.preview.yml up -d",
+  "seed": "pnpm --filter @blrplt/server exec tsx prisma/seed.ts",
+  "capture": "pnpm --filter @blrplt/client capture:screens",
+  "down": "docker compose -f docker-compose.preview.yml down -v",
+  "outputDir": "claude-docs/app-screens",
+  "healthchecks": [
+    {
+      "url": "http://localhost:4000/graphql",
+      "postJson": "{\"query\":\"{ __typename }\"}",
+      "expectContains": "Query",
+      "timeoutSec": 180
+    },
+    "http://localhost:3000",
+    "http://localhost:5173"
+  ],
+  "uiGlobs": [
+    "packages/client/**",
+    "packages/admin/**",
+    "packages/server/src/modules/**/dto/**",
+    "packages/*/schema.graphql",
+    "packages/client/src/locales/**"
+  ],
+  "env": {
+    "ENABLE_DEV_TOOLS": "true",
+    "CI": "true"
+  },
+  "clock": {
+    "freeze": true,
+    "source": "merge-base-commit-time"
+  },
+  "diff": {
+    "threshold": 0.1,
+    "changedRatioGate": 0.0007,
+    "ignoreScreens": []
+  }
+}
