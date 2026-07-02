@@ -24,6 +24,13 @@ inputs:
     description: 'sticky (update one comment) | new (one per run)'
     required: false
     default: 'sticky'
+  capture-base-fallback:
+    description: >-
+      pr mode: when the published base gallery is missing/stale, capture a
+      fresh base at the merge-base in a worktree (true|false). When false, the
+      run establishes a new baseline instead of diffing.
+    required: false
+    default: 'true'
   summary-api-key:
     description: 'Optional API key enabling the LLM change-summary step (non-blocking). Omit for mechanical-only.'
     required: false
@@ -60,22 +67,45 @@ runs:
         VP_CONFIG_PATH: ${{ inputs.config-path }}
         VP_MODE: ${{ inputs.mode }}
 
-    # 2. Bring the app up (project's `up`), wait for healthchecks.
+    # 2. PR mode: prepare the diff BASE before the head stack boots — compute
+    #    the merge-base + frozen clock epoch, fetch the published per-branch
+    #    gallery (reused when still valid), else capture a fresh base at the
+    #    merge-base in a worktree. Exports CAPTURE_FROZEN_EPOCH_MS and
+    #    VP_MERGE_BASE_SHA / VP_PUBLISHED_* / VP_BASE_DIR for later steps via
+    #    $GITHUB_ENV.
+    - if: steps.gate.outputs.should-run == 'true' && inputs.mode == 'pr'
+      id: prepare-base
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/prepare-base.mjs"
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+        VP_PAGES_BRANCH: ${{ inputs.pages-branch }}
+        VP_CAPTURE_BASE_FALLBACK: ${{ inputs.capture-base-fallback }}
+
+    # 3. Bring the app up (project's `up`), wait for healthchecks.
     - if: steps.gate.outputs.should-run == 'true'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/stack.mjs" up
       env:
         VP_CONFIG_PATH: ${{ inputs.config-path }}
 
-    # 3. Seed + capture the catalog (with the frozen clock epoch if enabled).
+    # 4. Seed + capture the HEAD catalog (with the frozen clock epoch from
+    #    prepare-base, inherited via $GITHUB_ENV, if enabled).
     - if: steps.gate.outputs.should-run == 'true'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/capture.mjs" head
       env:
         VP_CONFIG_PATH: ${{ inputs.config-path }}
 
-    # 4a. PR mode: fetch the published base gallery (or capture a fresh base),
-    #     diff, and post the comment / step-summary.
+    # 5. Tear the stack down (always) — diff/publish only need the files.
+    - if: always() && steps.gate.outputs.should-run == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/stack.mjs" down
+      env:
+        VP_CONFIG_PATH: ${{ inputs.config-path }}
+
+    # 6a. PR mode: diff head vs the prepared base and post the comment /
+    #     step-summary.
     #     NOTE (seam): prepare-base sets VP_MERGE_BASE_SHA / VP_PUBLISHED_DIR /
     #     VP_PUBLISHED_META / VP_BASE_DIR (salon-reach). This step owns the
     #     GitHub-context wiring (PR number, fork detection, gallery URL).
@@ -96,7 +126,7 @@ runs:
         # Best-effort link to the published base gallery for the base branch.
         VP_GALLERY_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.pages-branch }}/${{ github.base_ref }}
 
-    # 4b. Branch mode: publish/update the per-branch gallery to Pages.
+    # 6b. Branch mode: publish/update the per-branch gallery to Pages.
     - if: steps.gate.outputs.should-run == 'true' && inputs.mode == 'branch'
       id: publish
       shell: bash
@@ -105,13 +135,6 @@ runs:
         VP_CONFIG_PATH: ${{ inputs.config-path }}
         VP_PAGES_BRANCH: ${{ inputs.pages-branch }}
         VP_GITHUB_TOKEN: ${{ inputs.github-token }}
-
-    # 5. Always tear the stack down.
-    - if: always() && steps.gate.outputs.should-run == 'true'
-      shell: bash
-      run: node "$GITHUB_ACTION_PATH/src/stack.mjs" down
-      env:
-        VP_CONFIG_PATH: ${{ inputs.config-path }}
 
 branding:
   icon: 'camera'

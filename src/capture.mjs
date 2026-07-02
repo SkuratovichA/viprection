@@ -26,7 +26,12 @@ export function resolveFrozenEpoch(cfg) {
   const clock = cfg.clock;
   if (!clock?.freeze) return null;
   if (clock.source === 'fixed') return clock.fixedEpochMs ?? null;
-  // default: merge-base-commit-time (same for base & head). Fall back to HEAD.
+  // default: merge-base-commit-time (same for base & head). prepare-base.mjs
+  // is the single source of this epoch in PR mode (exported via $GITHUB_ENV);
+  // compute it here only when that env is absent (standalone / branch mode).
+  const fromEnv = Number(process.env.CAPTURE_FROZEN_EPOCH_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  // Fall back to HEAD when no merge-base is known.
   const sha = process.env.VP_MERGE_BASE_SHA || process.env.GITHUB_SHA;
   if (!sha) return null;
   try {

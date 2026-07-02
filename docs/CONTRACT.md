@@ -115,6 +115,12 @@ gallery is reused as the diff **base** when it is still valid:
 3. `toolVersion` / `browserVersion` mismatch → **fresh** base capture.
 4. otherwise → **fresh** base capture (a fallback, not an error).
 
+A **fresh base capture** happens in a `git worktree` pinned at the merge-base:
+`install` (if configured) → `up` → healthchecks → `seed` → `capture` → `down`
+(always), with the SAME `CAPTURE_FROZEN_EPOCH_MS` the head capture gets. It can
+be disabled with the `capture-base-fallback: 'false'` action input — the run
+then establishes a new baseline instead of diffing.
+
 ## Security model
 
 - **Never** `pull_request_target` — the pipeline runs untrusted PR code

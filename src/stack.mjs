@@ -29,12 +29,17 @@ async function loadConfig() {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
-/** Run a shell command, inheriting stdio, with the config env merged in. Rejects on non-zero. */
-export function run(command, extraEnv = {}) {
+/**
+ * Run a shell command, inheriting stdio, with the config env merged in.
+ * Rejects on non-zero. `cwd` lets prepare-base run the lifecycle inside the
+ * merge-base worktree (default: current dir).
+ */
+export function run(command, extraEnv = {}, { cwd } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
       shell: true,
       stdio: 'inherit',
+      cwd,
       env: { ...process.env, ...extraEnv },
     });
     child.on('error', reject);
@@ -44,8 +49,8 @@ export function run(command, extraEnv = {}) {
   });
 }
 
-/** Poll one healthcheck until ready or timeout. */
-async function waitForHealth(hcRaw) {
+/** Poll one healthcheck until ready or timeout. (Also used by prepare-base.) */
+export async function waitForHealth(hcRaw) {
   const hc = normalizeHealthcheck(hcRaw);
   const deadline = Date.now() + (hc.timeoutSec ?? 120) * 1000;
   const opts = hc.postJson
