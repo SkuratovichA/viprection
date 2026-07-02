@@ -40,7 +40,7 @@
  */
 import { readFile, appendFile, mkdir, cp, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveBase } from './resolve-base.mjs';
 import { run, waitForHealth } from './stack.mjs';
@@ -132,6 +132,21 @@ export async function fetchPublished({ pagesBranch, baseRef, repoDir, publishedR
  * the merge-base, then copy its outputDir into `baseDir`. `down` always runs
  * (finally); the worktree is removed afterwards (best-effort).
  */
+/** True when the given commit contains the project config (adoption existed). */
+function configExistsAtCommit(repoDir, sha, configPath) {
+  // git addresses blobs repo-relative; callers may hold an absolute path.
+  const rel = isAbsolute(configPath) ? relative(repoDir, configPath) : configPath;
+  try {
+    execFileSync('git', ['cat-file', '-e', `${sha}:${rel}`], {
+      cwd: repoDir,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function captureBaseInWorktree({
   cfg,
   mergeBaseSha,
@@ -262,6 +277,18 @@ export async function prepareBase({
     // baseline. The epoch is still exported so the head capture stays
     // deterministic (and becomes a reusable baseline).
     const reason = 'capture-base needed but VP_CAPTURE_BASE_FALLBACK=false';
+    console.log(`[prepare-base] ${reason} → mode=none (baseline run)`);
+    const env = frozenEpochMs != null ? { CAPTURE_FROZEN_EPOCH_MS: String(frozenEpochMs) } : {};
+    await emit({ mode: 'none', baseDir: null, frozenEpochMs, env });
+    return { mode: 'none', baseDir: null, mergeBaseSha, frozenEpochMs, reason };
+  }
+
+  // Bootstrap guard: if the project had not adopted visual-preview at the
+  // merge-base (no config file in that commit), a base capture is impossible —
+  // the base worktree has no up/capture commands to run. First-ever PR after
+  // adoption hits exactly this. Treat it as "establish baseline", not an error.
+  if (resolved.mode === 'capture-base' && !configExistsAtCommit(repoDir, mergeBaseSha, configPath)) {
+    const reason = `base ${mergeBaseSha.slice(0, 10)} predates visual-preview adoption (no ${configPath})`;
     console.log(`[prepare-base] ${reason} → mode=none (baseline run)`);
     const env = frozenEpochMs != null ? { CAPTURE_FROZEN_EPOCH_MS: String(frozenEpochMs) } : {};
     await emit({ mode: 'none', baseDir: null, frozenEpochMs, env });

@@ -24,13 +24,17 @@ function git(cwd, ...args) {
  * laid out exactly like publish.mjs produces: one subfolder per source branch
  * with manifest.json + preview-meta.json.
  */
-async function makeOrigin({ previews } = {}) {
+async function makeOrigin({ previews, baseConfig } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'vp-pb-origin-'));
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'user.email', 't@t');
   git(dir, 'config', 'user.name', 't');
   await mkdir(join(dir, 'ui'), { recursive: true });
   await writeFile(join(dir, 'ui', 'a.txt'), '1');
+  if (baseConfig) {
+    // Adoption existed at the base commit (the normal steady-state case).
+    await writeFile(join(dir, 'visual-preview.config.json'), JSON.stringify(baseConfig));
+  }
   git(dir, 'add', '.');
   git(dir, 'commit', '-qm', 'c1');
   const c1 = git(dir, 'rev-parse', 'HEAD');
@@ -123,7 +127,7 @@ test('merge-base + frozen epoch computed from the merge-base commit', async () =
 });
 
 test('no merge-base → vp-mode=none, nothing exported for pr-diff', async () => {
-  const origin = await makeOrigin();
+  const origin = await makeOrigin({ baseConfig: CONFIG });
   const { dir, cfgPath } = await makePrClone(origin.dir, CONFIG);
 
   const { result, outputs, env } = await withGithubFiles(() =>
@@ -165,7 +169,7 @@ test('published previews branch (publish.mjs layout) resolves VP_PUBLISHED_* →
 });
 
 test('capture-base fallback: lifecycle runs inside a merge-base worktree with the frozen epoch', async () => {
-  const origin = await makeOrigin(); // no previews branch → published unavailable
+  const origin = await makeOrigin({ baseConfig: CONFIG }); // no previews branch → published unavailable
   const config = {
     ...CONFIG,
     install: 'echo installed > installed.txt',
@@ -202,7 +206,7 @@ test('capture-base fallback: lifecycle runs inside a merge-base worktree with th
 });
 
 test('capture-base fallback disabled → vp-mode=none but the epoch still exports', async () => {
-  const origin = await makeOrigin();
+  const origin = await makeOrigin({ baseConfig: CONFIG });
   const { dir, cfgPath } = await makePrClone(origin.dir, CONFIG);
 
   const { result, outputs, env } = await withGithubFiles(() =>
@@ -232,4 +236,21 @@ test('capture.mjs resolveFrozenEpoch prefers the prepare-base env over recomputi
   } finally {
     delete process.env.CAPTURE_FROZEN_EPOCH_MS;
   }
+});
+
+test('base predates adoption (no config at merge-base) → mode=none, no crash', async () => {
+  // Default origin: NO config committed at c1 — the first-ever PR after adoption.
+  const origin = await makeOrigin();
+  const { dir, cfgPath } = await makePrClone(origin.dir, CONFIG);
+
+  const { result, outputs, env } = await withGithubFiles(() =>
+    prepareBase({ configPath: cfgPath, baseRef: 'main', repoDir: dir, currentVersions: VERSIONS })
+  );
+  assert.equal(result.mode, 'none');
+  assert.match(result.reason, /predates visual-preview adoption/);
+  assert.equal(outputs['vp-mode'], 'none');
+  // Baseline run must still be deterministic: the epoch is exported.
+  assert.equal(env.CAPTURE_FROZEN_EPOCH_MS, String(result.frozenEpochMs));
+  // pr-diff must see no merge-base (establish-baseline path).
+  assert.equal(env.VP_MERGE_BASE_SHA, undefined);
 });
