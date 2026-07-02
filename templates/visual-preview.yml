@@ -51,7 +51,10 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      # write: the diff job pushes before/after/diff images to the previews
+      # branch for the PR comment. Same-repo authors already have push rights
+      # and fork PRs get a read-only token, so this grants nothing new.
+      contents: write
       pull-requests: write # comment (no-op/ignored on forks)
     steps:
       - uses: actions/checkout@v4
