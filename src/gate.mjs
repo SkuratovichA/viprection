@@ -42,25 +42,28 @@ async function main() {
     process.exit(1);
   }
 
-  // Determine the changed file set.
+  // Branch mode ALWAYS runs: the per-branch gallery is the source-of-truth
+  // baseline (and the PR diff base). Gating it on "this commit touched UI" would
+  // let the baseline go stale — or, worse, never get created (a CI-only commit
+  // like adopting the workflow wouldn't publish, so no baseline ever exists).
+  // The uiGlob gate exists to skip pointless PR *diffs*, not branch publishes.
+  if (mode !== 'pr') {
+    console.log('visual-preview: branch mode → always publishing the gallery.');
+    await setOutput('should-run', 'true');
+    return;
+  }
+
+  // PR mode: skip when the PR touches no UI-affecting files.
   let changed = [];
   try {
-    if (mode === 'pr') {
-      const base = process.env.GITHUB_BASE_REF;
-      // origin/<base>...HEAD — the PR's changes relative to the merge base.
-      const range = base ? `origin/${base}...HEAD` : 'HEAD~1...HEAD';
-      changed = execFileSync('git', ['diff', '--name-only', range], { encoding: 'utf8' })
-        .split('\n')
-        .filter(Boolean);
-    } else {
-      // branch push: compare against the previous commit; if unavailable, run.
-      changed = execFileSync('git', ['diff', '--name-only', 'HEAD~1...HEAD'], { encoding: 'utf8' })
-        .split('\n')
-        .filter(Boolean);
-    }
-  } catch {
+    const base = process.env.GITHUB_BASE_REF;
+    const range = base ? `origin/${base}...HEAD` : 'HEAD~1...HEAD';
+    changed = execFileSync('git', ['diff', '--name-only', range], { encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean);
+  } catch (e) {
     // No diff computable (shallow clone / first commit) → run to be safe.
-    console.log('visual-preview: could not compute diff; running.');
+    console.log(`visual-preview: could not compute diff (${e.message.split('\n')[0]}); running.`);
     await setOutput('should-run', 'true');
     return;
   }
