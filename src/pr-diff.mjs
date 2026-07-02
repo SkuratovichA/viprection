@@ -35,7 +35,7 @@ async function getChangedFiles(baseRef) {
 
 export async function prDiff({
   configPath = process.env.VP_CONFIG_PATH || 'visual-preview.config.json',
-  resolveBase = resolveBaseImpl, // salon-reach's real staleness-guarded resolver
+  resolveBase = resolveBaseImpl, // fallback resolver (standalone use only)
   postComment, // injected by the caller (github api); if absent → summary only
   uploadImages, // injected: (changedResults, headDir, baseDir) => urlFor(localPath)
   isFork = process.env.VP_IS_FORK === 'true',
@@ -44,13 +44,22 @@ export async function prDiff({
   const headDir = cfg.outputDir;
   const baseRef = process.env.GITHUB_BASE_REF;
 
-  const base = await resolveBase({
-    config: cfg,
-    mergeBaseSha: process.env.VP_MERGE_BASE_SHA,
-    publishedMetaPath: process.env.VP_PUBLISHED_META,
-    publishedDir: process.env.VP_PUBLISHED_DIR,
-    freshBaseDir: process.env.VP_BASE_DIR,
-  });
+  // TRUST prepare-base's verdict. It already resolved base mode/dir once; re-
+  // resolving here risks a divergent answer if git state shifted between steps.
+  // Only fall back to resolving ourselves when prepare-base didn't run (e.g.
+  // standalone/local invocation without VP_BASE_MODE).
+  let base;
+  if (process.env.VP_BASE_MODE) {
+    base = { mode: process.env.VP_BASE_MODE, baseDir: process.env.VP_RESOLVED_BASE_DIR || null };
+  } else {
+    base = await resolveBase({
+      config: cfg,
+      mergeBaseSha: process.env.VP_MERGE_BASE_SHA,
+      publishedMetaPath: process.env.VP_PUBLISHED_META,
+      publishedDir: process.env.VP_PUBLISHED_DIR,
+      freshBaseDir: process.env.VP_BASE_DIR,
+    });
+  }
 
   if (base.mode === 'none' || !base.baseDir) {
     // No base to diff against (first-ever run on this branch) — publish head as

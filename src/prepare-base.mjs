@@ -215,6 +215,10 @@ export async function prepareBase({
     await setOutput('vp-mode', mode);
     await setOutput('vp-base-dir', baseDir ?? '');
     await setOutput('vp-frozen-epoch-ms', frozenEpochMs ?? '');
+    // Export the authoritative verdict to $GITHUB_ENV so pr-diff trusts it
+    // instead of re-running resolveBase (single decision point, no drift).
+    await exportEnv('VP_BASE_MODE', mode);
+    await exportEnv('VP_RESOLVED_BASE_DIR', baseDir ?? '');
     for (const [k, v] of Object.entries(env)) await exportEnv(k, v);
   };
 

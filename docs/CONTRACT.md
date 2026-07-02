@@ -24,6 +24,10 @@ comment, Pages publish, orchestration).
                                                  // a FRESH base capture in a
                                                  // detached merge-base worktree.
   "up": "docker compose -f docker-compose.preview.yml up -d",
+  // `up`/`down` are required non-empty strings. If your stack self-boots inside
+  // `capture` (e.g. Testcontainers), use "up": "true" as a no-op (it must be
+  // non-empty to pass config validation). The action still waits on
+  // healthchecks, so point them at whatever `capture` brings up.
   "seed": "pnpm --filter @app/server seed",        // optional
   "capture": "pnpm --filter @app/client capture:screens",
   "down": "docker compose -f docker-compose.preview.yml down -v",

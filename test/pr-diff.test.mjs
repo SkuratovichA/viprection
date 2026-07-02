@@ -102,3 +102,38 @@ test('prDiff with no base establishes baseline gracefully', async () => {
   // No throw = graceful baseline path.
   assert.ok(true);
 });
+
+test('prDiff TRUSTS VP_BASE_MODE from prepare-base and does not re-resolve', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-pr4-'));
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  await gallery(baseDir, [200, 0, 0]);
+  await gallery(headDir, [0, 0, 200]); // changed
+  await writeFile(join(root, 'cfg.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  process.env.RUNNER_TEMP = root;
+  process.env.GITHUB_STEP_SUMMARY = join(root, 'summary.md');
+  process.env.GITHUB_OUTPUT = join(root, 'out.txt');
+  // Prepare-base already resolved: reuse this baseDir.
+  process.env.VP_BASE_MODE = 'reuse';
+  process.env.VP_RESOLVED_BASE_DIR = baseDir;
+
+  let resolveCalled = false;
+  let posted = false;
+  try {
+    await prDiff({
+      configPath: join(root, 'cfg.json'),
+      resolveBase: async () => { resolveCalled = true; return { mode: 'none', baseDir: null }; },
+      postComment: async () => { posted = true; },
+      uploadImages: async () => (p) => `https://cdn/${p}`,
+    });
+  } finally {
+    delete process.env.VP_BASE_MODE;
+    delete process.env.VP_RESOLVED_BASE_DIR;
+  }
+  assert.equal(resolveCalled, false, 'must NOT re-run resolveBase when VP_BASE_MODE is set');
+  assert.ok(posted, 'should diff + post using the trusted base');
+});

@@ -35,6 +35,9 @@ async function loadConfig() {
  * merge-base worktree (default: current dir).
  */
 export function run(command, extraEnv = {}, { cwd } = {}) {
+  // An empty/whitespace command is an explicit no-op (e.g. `up: ""` for stacks
+  // that self-boot inside `capture`).
+  if (!command || !command.trim()) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
       shell: true,
