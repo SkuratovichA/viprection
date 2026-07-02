@@ -71,6 +71,7 @@ export function makeImageUploader({
   repo, prNumber, pagesBranch = 'previews',
   serverRawUrl = 'https://raw.githubusercontent.com',
   workRoot = process.env.RUNNER_TEMP || '/tmp',
+  token = process.env.GITHUB_TOKEN,
 }) {
   return async function uploadImages(explained, headDir, baseDir) {
     const wt = join(workRoot, 'vp-pr-images');
@@ -116,7 +117,19 @@ export function makeImageUploader({
     }
 
     const [owner, name] = repo.split('/');
-    return (localRel) => `${serverRawUrl}/${owner}/${name}/${pagesBranch}/pr-${prNumber}/${localRel}`;
+    // raw.githubusercontent only renders in comments for PUBLIC repos — GitHub's
+    // camo proxy fetches anonymously, so private-repo raw URLs show as broken
+    // images. Prefer the repo's GitHub Pages site (publicly served even for
+    // private repos when Pages is enabled on the previews branch); fall back to
+    // raw URLs when Pages is unavailable.
+    let base = `${serverRawUrl}/${owner}/${name}/${pagesBranch}`;
+    try {
+      const pages = await gh(`/repos/${repo}/pages`, { token });
+      if (pages?.html_url) base = pages.html_url.replace(/\/$/, '');
+    } catch {
+      // Pages not enabled — keep the raw fallback (works for public repos).
+    }
+    return (localRel) => `${base}/pr-${prNumber}/${localRel}`;
   };
 }
 
