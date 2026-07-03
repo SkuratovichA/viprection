@@ -31,6 +31,10 @@ That's it. Your `capture` command must write a `manifest.json` +
 PNGs to `outputDir` (the shared `GalleryManifest` format) — most Playwright/
 Puppeteer catalog scripts already do, or need a tiny adapter.
 
+New to it? **[docs/ADOPTING.md](docs/ADOPTING.md)** is the step-by-step
+checklist — every clean-CI gotcha (env/secrets, browser install, determinism,
+private-repo image hosting) we hit getting this green on real apps.
+
 ## Why this design
 
 - **Full stack in CI (command-based).** The action runs your `up → seed →
@@ -64,4 +68,5 @@ run on a live repo + adoption docs.
 | `src/image-diff.mjs` | Base↔head gallery diff engine |
 | `src/gate.mjs`, `src/glob.mjs` | UI-glob change gating |
 | `docs/CONTRACT.md` | The plug-and-play contract (source of truth) |
+| `docs/ADOPTING.md` | Step-by-step adoption guide + clean-CI gotcha checklist |
 | `examples/` | Real project configs |
