@@ -41,6 +41,7 @@ export async function prDiff({
   resolveBase = resolveBaseImpl, // fallback resolver (standalone use only)
   postComment, // injected by the caller (github api); if absent → summary only
   uploadImages, // injected: (changedResults, headDir, baseDir) => urlFor(localPath)
+  changedFiles: changedFilesIn, // injected (tests); default: git diff vs the base ref
   isFork = process.env.VP_IS_FORK === 'true',
   artifactMode = false, // true → images are in a run artifact, not inline
 } = {}) {
@@ -79,7 +80,7 @@ export async function prDiff({
     diffDir: join(process.env.RUNNER_TEMP || '/tmp', 'vp-diff'),
     diffOptions: { ...(cfg.diff || {}) },
   });
-  const changedFiles = await getChangedFiles(baseRef);
+  const changedFiles = changedFilesIn ?? (await getChangedFiles(baseRef));
   const explained = explainReport(report, changedFiles);
 
   // Semantic HTML-snapshot diff: attach added/removed visible lines per screen.

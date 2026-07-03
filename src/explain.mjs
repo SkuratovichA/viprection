@@ -23,11 +23,21 @@ const STOP = new Set([
   'pages', 'routes', 'route', 'modules', 'module', 'dto',
 ]);
 
+/** Prose keeps the 3 best hits — more reads as noise in the comment line. */
+const PROSE_RELATED_LIMIT = 3;
+/**
+ * The structured list feeds the coverage subtraction in pr-diff.mjs, so it must
+ * carry EVERY changed file the heuristic ties to the screen — capping it to the
+ * prose top-3 falsely reported all further related files as "uncovered". The
+ * high cap only guards against pathological overlap on huge PRs.
+ */
+const STRUCTURED_RELATED_LIMIT = 50;
+
 /**
  * Rank changed files by segment-overlap with a screen's route/name/section.
  * Returns the top-N most-related file paths (best-effort, not causal).
  */
-export function relatedFiles(screenResult, changedFiles, limit = 3) {
+export function relatedFiles(screenResult, changedFiles, limit = PROSE_RELATED_LIMIT) {
   const sc = screenResult.head ?? screenResult.base ?? {};
   const key = screenResult.key ?? '';
   const needle = new Set([
@@ -76,9 +86,10 @@ export function explainScreen(r, changedFiles) {
       if (r.resized) bits.push('dimensions changed');
       bits.push(`${pct(r.diffRatio)} of pixels differ`);
       if (r.bbox) bits.push(`region ~${r.bbox.w}×${r.bbox.h}px at (${r.bbox.x},${r.bbox.y})`);
-      const rel = relatedFiles(r, changedFiles);
-      r.relatedFiles = rel; // structured, for coverage reporting downstream
-      const relNote = rel.length ? ` — likely related to ${rel.map((f) => `\`${f}\``).join(', ')}` : '';
+      const rel = relatedFiles(r, changedFiles, STRUCTURED_RELATED_LIMIT);
+      r.relatedFiles = rel; // structured (full list), for coverage reporting downstream
+      const prose = rel.slice(0, PROSE_RELATED_LIMIT);
+      const relNote = prose.length ? ` — likely related to ${prose.map((f) => `\`${f}\``).join(', ')}` : '';
       return `${bits.join(', ')}${relNote}.`;
     }
     default:
@@ -90,5 +101,11 @@ export function explainScreen(r, changedFiles) {
 export function explainReport(report, changedFiles) {
   return report.results
     .filter((r) => r.status !== 'unchanged')
-    .map((r) => ({ ...r, explanation: explainScreen(r, changedFiles) }));
+    .map((r) => {
+      // explainScreen sets r.relatedFiles as a side effect — it must run BEFORE
+      // the spread copies r, or the structured field silently vanishes from the
+      // returned items (which blanked the coverage subtraction downstream).
+      const explanation = explainScreen(r, changedFiles);
+      return { ...r, explanation };
+    });
 }

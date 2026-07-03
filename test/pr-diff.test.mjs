@@ -15,16 +15,18 @@ function solidPng(w, h, [r, g, b]) {
   }
   return PNG.sync.write(png);
 }
-const MANIFEST = {
-  project: 'T', generatedAt: 'x',
-  sections: [{ id: '01', title: 'S', intro: '', screens: [
-    { name: 'home', route: '/', caption: 'Home', png: './01/home.png', status: 'ok' },
-  ] }],
-};
-async function gallery(dir, color) {
+function manifest(name = 'home') {
+  return {
+    project: 'T', generatedAt: 'x',
+    sections: [{ id: '01', title: 'S', intro: '', screens: [
+      { name, route: `/${name}`, caption: name, png: `./01/${name}.png`, status: 'ok' },
+    ] }],
+  };
+}
+async function gallery(dir, color, name = 'home') {
   await mkdir(join(dir, '01'), { recursive: true });
-  await writeFile(join(dir, 'manifest.json'), JSON.stringify(MANIFEST));
-  await writeFile(join(dir, '01/home.png'), solidPng(40, 40, color));
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest(name)));
+  await writeFile(join(dir, `01/${name}.png`), solidPng(40, 40, color));
 }
 
 test('prDiff posts a comment for same-repo with a changed screen', async () => {
@@ -136,4 +138,61 @@ test('prDiff TRUSTS VP_BASE_MODE from prepare-base and does not re-resolve', asy
   }
   assert.equal(resolveCalled, false, 'must NOT re-run resolveBase when VP_BASE_MODE is set');
   assert.ok(posted, 'should diff + post using the trusted base');
+});
+
+// ---------------------------------------------------------------------------
+// Coverage false positives: the structured relatedFiles used to be capped to
+// the prose top-3, so every 4th+ correlated file was reported "uncovered".
+// ---------------------------------------------------------------------------
+
+test('explain: structured relatedFiles is uncapped while the prose stays top-3', async () => {
+  const { explainReport } = await import('../src/explain.mjs');
+  const files = [1, 2, 3, 4, 5, 6].map((i) => `packages/client/src/features/dashboard/File${i}.tsx`);
+  const report = { results: [{
+    key: '01/dashboard', status: 'changed', diffRatio: 0.05,
+    head: { name: 'dashboard', route: '/dashboard', caption: 'Dashboard', png: './01/dashboard.png' },
+  }] };
+  const [r] = explainReport(report, files);
+  assert.deepEqual(r.relatedFiles, files, 'structured field must carry ALL correlated files');
+  const inProse = files.filter((f) => r.explanation.includes(f));
+  assert.equal(inProse.length, 3, 'the prose "likely related" line stays capped at 3');
+});
+
+test('coverage: every correlated file counts as covered — only truly unrelated files are nagged', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-pr5-'));
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  await gallery(baseDir, [200, 0, 0], 'dashboard');
+  await gallery(headDir, [0, 0, 200], 'dashboard'); // changed
+  await writeFile(join(root, 'cfg.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  process.env.RUNNER_TEMP = root;
+  process.env.GITHUB_STEP_SUMMARY = join(root, 'summary.md');
+  process.env.GITHUB_OUTPUT = join(root, 'out.txt');
+
+  // 6 files the heuristic ties to the changed "dashboard" screen + 1 unrelated.
+  const related = [1, 2, 3, 4, 5, 6].map((i) => `packages/client/src/features/dashboard/File${i}.tsx`);
+  const unrelated = 'packages/client/src/features/billing/Invoice.tsx';
+
+  let posted = null;
+  await prDiff({
+    configPath: join(root, 'cfg.json'),
+    resolveBase: async () => ({ mode: 'reuse', baseDir }),
+    postComment: async (md) => { posted = md; },
+    uploadImages: async () => (p) => `https://cdn/${p}`,
+    changedFiles: [...related, unrelated],
+    isFork: false,
+  });
+
+  assert.ok(posted, 'comment should be posted');
+  assert.ok(posted.includes('### 🧭 Coverage'), 'coverage section renders');
+  assert.ok(posted.includes('**1 changed UI file(s)'), 'exactly ONE file is uncovered');
+  assert.ok(posted.includes(unrelated), 'the unrelated file is still nagged');
+  for (const f of related.slice(3)) {
+    assert.ok(!posted.includes(f), `${f} is correlated (beyond prose top-3) and must NOT be listed anywhere`);
+  }
+  assert.ok(posted.includes(related[0]), 'top correlated files still appear in the prose');
 });
