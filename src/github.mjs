@@ -10,7 +10,8 @@
  * to the raw githubusercontent URL. (Reuses the same orphan pages branch the
  * per-branch galleries live on, in a PR-scoped subfolder that can be pruned.)
  */
-import { mkdir, cp, rm } from 'node:fs/promises';
+import { mkdir, cp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
@@ -61,6 +62,26 @@ function git(args, cwd) {
 }
 
 /**
+ * Ensure an empty `.nojekyll` exists at the root of a pages-branch worktree.
+ *
+ * Without it, GitHub Pages "legacy" builds run Jekyll on the previews branch,
+ * and Jekyll intermittently fails ("Page build failed") or lags for hours on
+ * PNG-heavy pushes — every image URL in the PR comment 404s until it recovers.
+ * `.nojekyll` switches Pages to the plain static deploy (seconds, no Jekyll).
+ *
+ * No-op when the file already exists, so callers that stage-then-commit stay
+ * idempotent: the file rides along in the same commit as the content when
+ * absent, and never forces an otherwise-empty commit.
+ *
+ * Exported for reuse by every writer of the pages branch (the branch-gallery
+ * publisher in publish.mjs should call this on its worktree root too).
+ */
+export async function ensureNojekyll(worktreeRoot) {
+  const p = join(worktreeRoot, '.nojekyll');
+  if (!existsSync(p)) await writeFile(p, '');
+}
+
+/**
  * Upload the changed screens' base/head/diff PNGs to the pages branch under
  * pr-<num>/ and return urlFor(localRelPath) → raw URL. `localRelPath` uses the
  * "base/…", "head/…", "diff/…" convention that comment.mjs builds.
@@ -103,6 +124,10 @@ export function makeImageUploader({
       if (r.annotatedPng && r.annotatedPngName)
         await copyInto(r.annotatedPng, join(prDir, 'annotated', r.annotatedPngName));
     }
+
+    // Pages must never run Jekyll on this branch (its builds fail/lag on
+    // PNG-heavy pushes → hours of 404 images). Staged with the images below.
+    await ensureNojekyll(wt);
 
     git(['-C', wt, 'add', '-A']);
     let changed = true;

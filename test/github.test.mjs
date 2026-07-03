@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeCommentPoster } from '../src/github.mjs';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { makeCommentPoster, makeImageUploader } from '../src/github.mjs';
 
 // Swap global fetch with a recording stub for the duration of a test.
 function withFetch(handler, fn) {
@@ -46,4 +50,82 @@ test('postComment patches the existing marker comment', async () => {
   const patch = calls.find((c) => c.method === 'PATCH');
   assert.ok(patch, 'should PATCH the existing comment');
   assert.match(patch.url, /\/issues\/comments\/42$/);
+});
+
+// ---------------------------------------------------------------------------
+// uploadImages ↔ .nojekyll (field bug #12: Pages' Jekyll builds fail/lag on
+// PNG-heavy pushes, 404-ing every preview image until .nojekyll disables them).
+// Real git against a local bare "origin"; only the GitHub REST call is stubbed.
+// ---------------------------------------------------------------------------
+
+const IDENT = ['-c', 'user.name=t', '-c', 'user.email=t@t.local'];
+function sh(args, cwd) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+test('uploadImages ensures .nojekyll on the previews branch (staged when missing, skipped when present)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-gh-'));
+  const originDir = join(root, 'origin.git');
+  const repoDir = join(root, 'repo');
+
+  // A bare "origin" plus a working clone with one commit on main.
+  sh(['init', '--bare', '-b', 'main', originDir]);
+  sh(['init', '-b', 'main', repoDir]);
+  await writeFile(join(repoDir, 'README.md'), 'hi');
+  sh(['add', '-A'], repoDir);
+  sh([...IDENT, 'commit', '-m', 'init'], repoDir);
+  sh(['remote', 'add', 'origin', originDir], repoDir);
+  sh(['push', '-q', 'origin', 'main'], repoDir);
+
+  // Seed a pre-existing previews branch WITHOUT .nojekyll — the exact state
+  // every adopter had before this fix.
+  const seedWt = join(root, 'seed');
+  sh(['worktree', 'add', '--detach', seedWt], repoDir);
+  sh(['checkout', '--orphan', 'previews'], seedWt);
+  sh(['reset', '--hard'], seedWt);
+  await writeFile(join(seedWt, 'seed.txt'), 'x');
+  sh(['add', '-A'], seedWt);
+  sh([...IDENT, 'commit', '-m', 'seed'], seedWt);
+  sh(['push', '-q', 'origin', 'HEAD:previews'], seedWt);
+  sh(['worktree', 'remove', '--force', seedWt], repoDir);
+
+  // One changed screen with a base+head image to upload.
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  await mkdir(join(baseDir, '01'), { recursive: true });
+  await mkdir(join(headDir, '01'), { recursive: true });
+  await writeFile(join(baseDir, '01/home.png'), 'base-bytes');
+  await writeFile(join(headDir, '01/home.png'), 'head-bytes');
+  const explained = [
+    { key: '01/home', status: 'changed', base: { png: './01/home.png' }, head: { png: './01/home.png' } },
+  ];
+
+  const upload = makeImageUploader({ repo: 'o/r', prNumber: '5', pagesBranch: 'previews', workRoot: root, token: 't' });
+  const wt = join(root, 'vp-pr-images');
+  const origCwd = process.cwd();
+  try {
+    process.chdir(repoDir); // the uploader's git calls run from the repo checkout
+    await withFetch(
+      async () => ok({ has_pages: false }),
+      async () => {
+        // Run 1: .nojekyll missing on the branch → staged WITH the images
+        // (one commit — no separate housekeeping commit).
+        const urlFor = await upload(explained, headDir, baseDir);
+        assert.equal(typeof urlFor, 'function');
+        const tree = sh(['ls-tree', '-r', '--name-only', 'previews'], originDir).split('\n');
+        assert.ok(tree.includes('.nojekyll'), '.nojekyll must be committed at the branch root');
+        assert.ok(tree.includes('pr-5/head/01/home.png'), 'images land under pr-<n>/');
+        assert.equal(sh(['rev-list', '--count', 'previews'], originDir), '2', 'seed + ONE upload commit');
+
+        // Run 2: .nojekyll present, images identical → nothing to commit.
+        sh(['worktree', 'remove', '--force', wt], repoDir); // fresh runner ≈ no stale worktree
+        await upload(explained, headDir, baseDir);
+        assert.equal(sh(['rev-list', '--count', 'previews'], originDir), '2', 'idempotent: no empty commit');
+        const tree2 = sh(['ls-tree', '--name-only', 'previews'], originDir).split('\n');
+        assert.ok(tree2.includes('.nojekyll'), '.nojekyll stays on the branch');
+      }
+    );
+  } finally {
+    process.chdir(origCwd);
+  }
 });
