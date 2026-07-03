@@ -94,6 +94,11 @@ runner, which is where the checklist below matters.
    (checklist above).
 9. **Every "silent fallback" costs you a debugging session.** Make each fallback
    `console.warn` its reason. Three of the first live bugs hid behind silent ones.
+10. **"Base branch policy prohibits the merge" when the PR touches a workflow
+    file.** A token without the `workflow` OAuth scope cannot merge a PR that
+    edits `.github/workflows/*` — and the REST API masks the real cause as a
+    branch-policy error even with all checks green (only the GraphQL path names
+    it). Fix: `gh auth refresh -s workflow`, or merge from the UI.
 
 ## A working reference
 
