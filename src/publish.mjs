@@ -111,7 +111,7 @@ export async function publish({
   })();
   if (!hasChanges) {
     console.log('publish: no gallery changes to publish.');
-    await setOutput('url', pagesUrl(repo, serverUrl, pagesBranch, sourceBranch));
+    await setOutput('url', galleryUrl(cfg, repo, serverUrl, pagesBranch, sourceBranch));
     return;
   }
   // Commit as the pushing actor; author identity is set by the workflow env.
@@ -124,15 +124,19 @@ export async function publish({
   ]);
   git(['-C', wt, 'push', 'origin', `HEAD:${pagesBranch}`]);
 
-  const url = pagesUrl(repo, serverUrl, pagesBranch, sourceBranch);
+  const url = galleryUrl(cfg, repo, serverUrl, pagesBranch, sourceBranch);
   console.log(`publish: gallery updated → ${url}`);
   await setOutput('url', url);
 }
 
-function pagesUrl(repo, serverUrl, pagesBranch, branch) {
-  // If GitHub Pages serves the pages branch, the user's Pages URL is
-  // https://<owner>.github.io/<repo>/<branch>/. We surface the raw branch path
-  // as a fallback (works regardless of Pages config).
+function galleryUrl(cfg, repo, serverUrl, pagesBranch, branch) {
+  // Where a human opens this branch's gallery. An explicit publicBaseUrl
+  // (S3/CloudFront mirror of the whole previews branch) wins; otherwise the
+  // github.com tree path — it works regardless of Pages config (the Pages URL
+  // itself is owner-derivable but Pages may not be enabled).
+  if (cfg?.publicBaseUrl) {
+    return `${String(cfg.publicBaseUrl).replace(/\/+$/, '')}/${branch}/index.html`;
+  }
   const [owner, name] = (repo || '/').split('/');
   return `${serverUrl}/${owner}/${name}/tree/${pagesBranch}/${branch}`;
 }

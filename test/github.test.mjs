@@ -129,3 +129,47 @@ test('uploadImages ensures .nojekyll on the previews branch (staged when missing
     process.chdir(origCwd);
   }
 });
+
+// ---------- resolvePublicBase / probePublicBase (v1.1) ----------
+import { resolvePublicBase, probePublicBase } from '../src/github.mjs';
+
+test('resolvePublicBase: explicit publicBaseUrl wins, trailing slash trimmed', async () => {
+  const r = await resolvePublicBase({
+    repo: 'o/r',
+    publicBaseUrl: 'https://preview.dev.busano.cz/',
+  });
+  assert.deepEqual(r, { base: 'https://preview.dev.busano.cz', source: 'publicBaseUrl' });
+});
+
+test('resolvePublicBase: raw fallback when Pages detection errors', async () => {
+  // Bogus API host → gh() throws → warned raw fallback.
+  process.env.GITHUB_API_URL = 'http://127.0.0.1:1';
+  try {
+    const r = await resolvePublicBase({ repo: 'o/r', token: 'x', pagesBranch: 'previews' });
+    assert.equal(r.source, 'raw');
+    assert.equal(r.base, 'https://raw.githubusercontent.com/o/r/previews');
+  } finally {
+    delete process.env.GITHUB_API_URL;
+  }
+});
+
+test('probePublicBase: 401 → links mode (reachable, no inline images)', async () => {
+  const r = await probePublicBase('https://x', {
+    fetchImpl: async () => ({ status: 401, ok: false }),
+  });
+  assert.deepEqual(r, { reachable: true, status: 401, inlineImages: false });
+});
+
+test('probePublicBase: 200 → inline images', async () => {
+  const r = await probePublicBase('https://x', {
+    fetchImpl: async () => ({ status: 200, ok: true }),
+  });
+  assert.deepEqual(r, { reachable: true, status: 200, inlineImages: true });
+});
+
+test('probePublicBase: network error degrades to links, never throws', async () => {
+  const r = await probePublicBase('https://x', {
+    fetchImpl: async () => { throw new Error('boom'); },
+  });
+  assert.deepEqual(r, { reachable: false, status: 0, inlineImages: false });
+});

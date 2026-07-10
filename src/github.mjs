@@ -63,6 +63,66 @@ function git(args, cwd) {
 }
 
 /**
+ * Where is the previews-branch content publicly served? Priority (each
+ * fallback warns — no silent fallbacks):
+ *   1. explicit config `publicBaseUrl` (e.g. an S3/CloudFront mirror)
+ *   2. the repo's GitHub Pages site (has_pages via plain repo GET)
+ *   3. raw.githubusercontent.com (renders only for public repos)
+ *
+ * @returns {Promise<{ base: string, source: 'publicBaseUrl'|'pages'|'raw' }>}
+ */
+export async function resolvePublicBase({
+  repo,
+  token,
+  publicBaseUrl,
+  pagesBranch = 'previews',
+  serverRawUrl = 'https://raw.githubusercontent.com',
+}) {
+  const [owner, name] = (repo || '/').split('/');
+  if (publicBaseUrl) {
+    return { base: String(publicBaseUrl).replace(/\/+$/, ''), source: 'publicBaseUrl' };
+  }
+  try {
+    const meta = await gh(`/repos/${repo}`, { token });
+    if (meta?.has_pages) return { base: `https://${owner}.github.io/${name}`, source: 'pages' };
+    console.warn(
+      '[public-base] no publicBaseUrl configured and repo has no Pages site — raw URLs (render only on public repos)'
+    );
+  } catch (e) {
+    console.warn(`[public-base] Pages detection failed (${e.message}) — raw URLs`);
+  }
+  return { base: `${serverRawUrl}/${owner}/${name}/${pagesBranch}`, source: 'raw' };
+}
+
+/**
+ * Can GitHub's camo proxy actually render images from this base inline?
+ * Camo fetches anonymously, so an auth-walled mirror (e.g. Basic-auth
+ * CloudFront — the busano setup, a deliberate privacy choice) yields broken
+ * <img>s. One anonymous HEAD tells us; comment rendering degrades to links
+ * when inlineImages=false. Probe failures degrade to links too (safe side),
+ * always warned.
+ *
+ * @returns {Promise<{ reachable: boolean, status: number, inlineImages: boolean }>}
+ */
+export async function probePublicBase(base, { fetchImpl = fetch } = {}) {
+  try {
+    const res = await fetchImpl(`${base}/`, { method: 'HEAD', redirect: 'follow' });
+    if (res.status === 401 || res.status === 403) {
+      console.warn(
+        `[public-base] ${base} requires auth (HTTP ${res.status}) — comment renders links, not inline images (camo fetches anonymously)`
+      );
+      return { reachable: true, status: res.status, inlineImages: false };
+    }
+    if (res.ok) return { reachable: true, status: res.status, inlineImages: true };
+    console.warn(`[public-base] ${base} anonymous probe → HTTP ${res.status} — degrading to links`);
+    return { reachable: false, status: res.status, inlineImages: false };
+  } catch (e) {
+    console.warn(`[public-base] ${base} probe failed (${e.message}) — degrading to links`);
+    return { reachable: false, status: 0, inlineImages: false };
+  }
+}
+
+/**
  * Ensure an empty `.nojekyll` exists at the root of a pages-branch worktree.
  *
  * Without it, GitHub Pages "legacy" builds run Jekyll on the previews branch,
@@ -94,6 +154,7 @@ export function makeImageUploader({
   serverRawUrl = 'https://raw.githubusercontent.com',
   workRoot = process.env.RUNNER_TEMP || '/tmp',
   token = process.env.VP_GITHUB_TOKEN || process.env.GITHUB_TOKEN,
+  publicBaseUrl, // config publicBaseUrl — wins over Pages detection (see resolvePublicBase)
 }) {
   return async function uploadImages(explained, headDir, baseDir) {
     const wt = join(workRoot, 'vp-pr-images');
@@ -163,26 +224,9 @@ export function makeImageUploader({
       git(['-C', wt, 'push', 'origin', `HEAD:${pagesBranch}`]);
     }
 
-    const [owner, name] = repo.split('/');
-    // raw.githubusercontent only renders in comments for PUBLIC repos — GitHub's
-    // camo proxy fetches anonymously, so private-repo raw URLs show as broken
-    // images. Prefer the repo's GitHub Pages site (publicly served even for
-    // private repos when Pages is enabled on the previews branch); fall back to
-    // raw URLs when Pages is unavailable.
-    let base = `${serverRawUrl}/${owner}/${name}/${pagesBranch}`;
-    try {
-      // The plain repo GET is readable with ANY GITHUB_TOKEN (metadata scope is
-      // implicit) — unlike GET /pages, which needs a pages permission the job
-      // may not have. has_pages tells us the site exists; project sites live at
-      // the derivable owner.github.io/name URL (custom domains are rare enough
-      // to accept the default here).
-      const meta = await gh(`/repos/${repo}`, { token });
-      if (meta?.has_pages) base = `https://${owner}.github.io/${name}`;
-    } catch (e) {
-      // Keep the raw fallback (fine for public repos) — but never silently:
-      // three of the first live bugs hid behind silent fallbacks.
-      console.warn(`[pr-images] Pages detection failed (${e.message}); using raw URLs`);
-    }
+    const { base } = await resolvePublicBase({
+      repo, token, publicBaseUrl, pagesBranch, serverRawUrl,
+    });
     return (localRel) => `${base}/pr-${prNumber}/${localRel}`;
   };
 }
