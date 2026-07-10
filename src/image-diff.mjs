@@ -16,6 +16,7 @@ import { join, dirname } from 'node:path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import { htmlPrefilter } from './html-prefilter.mjs';
+import { screenKey, screenKeyToFilename, parseScreenKey, entryViewport } from './schema.mjs';
 
 /**
  * @typedef {Object} ScreenRef
@@ -27,12 +28,17 @@ import { htmlPrefilter } from './html-prefilter.mjs';
  * @property {'ok'|'failed'} status
  */
 
-/** Flatten a GalleryManifest into a name→screen map (section-qualified key). */
+/**
+ * Flatten a GalleryManifest into a screenKey→screen map. The key is the canonical
+ * `section/name[@viewport]` (desktop → no suffix), so the same logical screen at
+ * different viewports gets distinct keys instead of colliding in the Map.
+ */
 export function indexManifest(manifest) {
   const byKey = new Map();
   for (const sec of manifest.sections ?? []) {
     for (const sc of sec.screens ?? []) {
-      byKey.set(`${sec.id}/${sc.name}`, { section: sec.id, ...sc });
+      const entry = { section: sec.id, ...sc, viewport: entryViewport(sc) };
+      byKey.set(screenKey(entry), entry);
     }
   }
   return byKey;
@@ -144,7 +150,7 @@ export async function compareGalleries({ baseDir, headDir, diffDir, diffOptions 
   const headIdx = indexManifest(headManifest);
 
   const regionsFor = (key) =>
-    (diffOptions.ignoreRegions ?? []).filter((r) => r.screen === '*' || r.screen === key.split('/')[1]);
+    (diffOptions.ignoreRegions ?? []).filter((r) => r.screen === '*' || r.screen === parseScreenKey(key).name);
 
   const results = [];
   const allKeys = new Set([...baseIdx.keys(), ...headIdx.keys()]);
@@ -176,7 +182,7 @@ export async function compareGalleries({ baseDir, headDir, diffDir, diffOptions 
     const d = await diffScreen({
       basePng: join(baseDir, base.png.replace(/^\.\//, '')),
       headPng: join(headDir, head.png.replace(/^\.\//, '')),
-      diffOutPath: join(diffDir, `${key.replace(/\//g, '__')}.diff.png`),
+      diffOutPath: join(diffDir, `${screenKeyToFilename(key)}.diff.png`),
       threshold: diffOptions.threshold,
       changedRatioGate: diffOptions.changedRatioGate,
       ignoreRegions: regionsFor(key),
@@ -185,7 +191,7 @@ export async function compareGalleries({ baseDir, headDir, diffDir, diffOptions 
       key, status: d.changed ? 'changed' : 'unchanged',
       head, base, diffRatio: d.diffRatio, bbox: d.bbox, resized: d.resized,
       diffPng: d.diffPngPath, // absolute path (for upload)
-      diffPngName: d.diffPngPath ? `${key.replace(/\//g, '__')}.diff.png` : null, // name under diff/
+      diffPngName: d.diffPngPath ? `${screenKeyToFilename(key)}.diff.png` : null, // name under diff/
     });
   }
 
