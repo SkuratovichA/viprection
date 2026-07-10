@@ -87,7 +87,11 @@ runner, which is where the checklist below matters.
       broken or meaningless on small widths get an honest per-entry
       `viewports: ["desktop"]` opt-out — a cramped/overflowing mobile shot of a
       non-responsive screen is a fact about the app, not a harness bug; track
-      it as product work.
+      it as product work. Also: full-page shots render `position: fixed`
+      elements at their viewport offset from the document TOP, so a
+      bottom-docked mobile nav floats mid-page — re-anchor bottom-docked fixed
+      elements to the document bottom right before the shot (top-fixed headers
+      already look right).
 - [ ] **First run creates the baseline.** Merge the workflow to a tracked branch;
       the first push runs branch-mode and publishes `previews/<branch>`. Only then
       does a PR have a base to diff against. (Branch mode always publishes — it is
