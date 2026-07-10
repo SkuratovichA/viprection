@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { toolVersion, browserVersion } from './versions.mjs';
+import { writeRootIndex } from './index-pages.mjs';
 
 function git(args, opts = {}) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim();
@@ -132,23 +133,14 @@ function pagesUrl(repo, serverUrl, pagesBranch, branch) {
 }
 
 async function writeCrossBranchIndex(wt, repo) {
-  // List immediate subdirs (branches) — best-effort, dependency-free.
-  const { readdir } = await import('node:fs/promises');
-  const entries = await readdir(wt, { withFileTypes: true });
-  const branches = entries
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-    .map((e) => e.name)
-    .sort();
-  const links = branches
-    .map((b) => `<li><a href="./${b}/index.html"><code>${b}</code></a></li>`)
-    .join('\n');
-  const html = `<!doctype html><meta charset="utf-8">
-<title>${repo} — visual previews</title>
-<style>body{font:15px system-ui;margin:40px;max-width:640px}h1{font-size:20px}code{background:#f0f0f3;padding:2px 6px;border-radius:5px}</style>
-<h1>Visual previews — ${repo}</h1>
-<p>Always-current screenshot galleries, one per tracked branch:</p>
-<ul>${links}</ul>`;
-  await writeFile(join(wt, 'index.html'), html);
+  // Delegated to the shared landing-page renderer so branch publishes and
+  // PR-image uploads produce the same root index (branch galleries + PRs
+  // grouped by state; pr-<n>/ dirs get their own gallery page from the
+  // uploader). The old inline version listed pr dirs as "branches" and linked
+  // per-PR index.html files that never existed.
+  await writeRootIndex(wt, repo, {
+    token: process.env.VP_GITHUB_TOKEN || process.env.GITHUB_TOKEN,
+  });
 }
 
 // Allow direct CLI invocation from the action step.

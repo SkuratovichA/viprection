@@ -14,10 +14,11 @@ import { mkdir, cp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { entriesFromExplained, writePrIndexHtml, writeRootIndex } from './index-pages.mjs';
 
 const API = process.env.GITHUB_API_URL || 'https://api.github.com';
 
-async function gh(path, { method = 'GET', token, body } = {}) {
+export async function gh(path, { method = 'GET', token, body } = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
@@ -124,6 +125,25 @@ export function makeImageUploader({
       if (r.annotatedPng && r.annotatedPngName)
         await copyInto(r.annotatedPng, join(prDir, 'annotated', r.annotatedPngName));
     }
+
+    // Browsable pages, staged with the images: a gallery page inside pr-<n>/
+    // and a refreshed root index (the old root linked every pr dir to an
+    // index.html that never existed). PR lookup is best-effort — without it
+    // the pages render stateless rows, warned, never silent.
+    let prInfo = null;
+    try {
+      const pr = await gh(`/repos/${repo}/pulls/${prNumber}`, { token });
+      prInfo = {
+        state: pr.merged_at ? 'merged' : pr.state !== 'open' ? 'closed' : pr.draft ? 'draft' : 'open',
+        title: pr.title ?? '',
+      };
+    } catch (e) {
+      console.warn(`[pr-images] PR #${prNumber} lookup failed (${e.message}); gallery header stays stateless`);
+    }
+    await writePrIndexHtml(prDir, {
+      repo, prNumber, info: prInfo, entries: entriesFromExplained(explained),
+    });
+    await writeRootIndex(wt, repo, { token });
 
     // Pages must never run Jekyll on this branch (its builds fail/lag on
     // PNG-heavy pushes → hours of 404 images). Staged with the images below.
