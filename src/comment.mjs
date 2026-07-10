@@ -6,10 +6,22 @@
  * a `urlFor(localPath)` resolver. This module is pure markdown, no I/O.
  */
 
+import { parseScreenKey } from './schema.mjs';
+
 const MARKER = '<!-- viprection:visual-diff -->';
 
 function statusEmoji(s) {
   return { added: '🆕', removed: '🗑️', changed: '🔧', failed: '⚠️' }[s] ?? '•';
+}
+
+/** Viewport of a diff RESULT — authoritative on the object, never string-parsed. */
+function resultViewport(r) {
+  return r.head?.viewport ?? r.base?.viewport ?? 'desktop';
+}
+
+/** Device sub-heading badge: desktop → 🖥, anything else → 📱 + its name. */
+function deviceBadge(vp) {
+  return vp === 'desktop' ? '🖥 Desktop' : `📱 ${vp}`;
 }
 
 /**
@@ -25,6 +37,7 @@ function statusEmoji(s) {
  * @returns {string} markdown
  */
 export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly, coverage, artifactNote, inlineImages = true }) {
+  const deviceOrder = (report.viewports ?? [{ name: 'desktop' }]).map((v) => v.name);
   const { summary } = report;
   const totalTouched = summary.added + summary.removed + summary.changed + summary.failed;
 
@@ -56,40 +69,100 @@ export function renderComment({ report, explained, urlFor, galleryUrl, headSha, 
     );
   }
 
+  // BUCKET explained items by LOGICAL screen (section/name, no @viewport): the
+  // desktop and mobile variants of one screen are SEPARATE explained items but
+  // must render as ONE <details> with per-device sub-sections. A bucket's
+  // position = the position of its first-seen member, so the pre-sorted
+  // explained order (added→removed→changed→failed, biggest-diff-first) is kept.
+  const buckets = new Map(); // baseKey → { baseKey, section, name, variants: [] }
+  for (const r of explained) {
+    const { section, name } = parseScreenKey(r.key);
+    const baseKey = `${section}/${name}`;
+    let b = buckets.get(baseKey);
+    if (!b) {
+      b = { baseKey, section, name, variants: [] };
+      buckets.set(baseKey, b);
+    }
+    b.variants.push(r);
+  }
+  // Within a bucket, order devices Desktop-first then by report.viewports order.
+  const deviceRank = (vp) => {
+    if (vp === 'desktop') return -1;
+    const i = deviceOrder.indexOf(vp);
+    return i === -1 ? deviceOrder.length : i;
+  };
+
   // Screens are rendered EXPANDED: reviewers must see the changes without
   // hunting for a disclosure arrow. <details open> keeps them collapsible for
-  // long comments; beyond OPEN_LIMIT screens the rest start collapsed.
+  // long comments; beyond OPEN_LIMIT SCREENS (not device-rows) the rest start
+  // collapsed.
   const OPEN_LIMIT = 6;
-  explained.forEach((r, idx) => {
-    const title = `${statusEmoji(r.status)} \`${r.key}\``;
+  [...buckets.values()].forEach((bucket, idx) => {
+    const variants = [...bucket.variants].sort(
+      (a, b) => deviceRank(resultViewport(a)) - deviceRank(resultViewport(b))
+    );
     const open = idx < OPEN_LIMIT ? ' open' : '';
-    lines.push('', `<details${open}><summary>${title} — ${r.status}</summary>`, '');
-    lines.push(r.explanation, '');
+    // One overall status for the summary line: if every variant shares a status
+    // show it, else 'multiple'.
+    const statuses = new Set(variants.map((v) => v.status));
+    const overall = statuses.size === 1 ? [...statuses][0] : 'multiple';
+    const title = `${statusEmoji(variants[0].status)} \`${bucket.baseKey}\``;
+    lines.push('', `<details${open}><summary>${title} — ${overall}</summary>`, '');
 
-    // Semantic diff of the HTML snapshots: what appeared / disappeared, in
-    // words — readable even when the pixel change is just a layout shift, and
-    // the way added/removed functionality shows up.
-    const hc = r.htmlChanges;
-    if (hc && (hc.added.length || hc.removed.length)) {
-      const CAP = 8;
-      lines.push('**What changed on the screen:**', '');
-      for (const l of hc.added.slice(0, CAP)) lines.push(`- ➕ \`${escapeMd(l)}\``);
-      if (hc.added.length > CAP) lines.push(`- ➕ …and ${hc.added.length - CAP} more added`);
-      for (const l of hc.removed.slice(0, CAP)) lines.push(`- ➖ \`${escapeMd(l)}\``);
-      if (hc.removed.length > CAP) lines.push(`- ➖ …and ${hc.removed.length - CAP} more removed`);
-      lines.push('');
-    }
+    variants.forEach((r, vi) => {
+      const vp = resultViewport(r);
+      // Per-device sub-heading with a device badge; append the device status when
+      // the bucket mixes statuses (e.g. 'mobile — ➕ added').
+      const perStatus = overall === 'multiple' ? ` — ${statusEmoji(r.status)} ${r.status}` : '';
+      lines.push(`#### ${deviceBadge(vp)}${perStatus}`, '');
+      renderScreenBody(lines, r, { urlFor, inlineImages });
+      if (vi < variants.length - 1) lines.push('');
+    });
 
-    // Image block: Before | After. "After" carries drawn boxes around the
-    // changed regions when available — far more readable than the raw pixel
-    // overlay, which turns layout shifts into red soup. The raw overlay stays
-    // reachable as a link for the curious.
-    const baseUrl = r.base ? urlFor(joinDir('base', r.base.png)) : null;
-    const annUrl = r.annotatedPngName ? urlFor(`annotated/${r.annotatedPngName}`) : null;
-    const headUrl = r.head ? urlFor(joinDir('head', r.head.png)) : null;
-    const afterUrl = annUrl ?? headUrl;
-    const diffUrl = r.diffPngName ? urlFor(`diff/${r.diffPngName}`) : null;
+    lines.push('', '</details>');
+  });
 
+  renderCoverage(lines, { explained, coverage });
+
+  if (galleryUrl) lines.push('', `[Full gallery →](${galleryUrl})`);
+  return lines.join('\n');
+}
+
+/**
+ * Render ONE device variant's body: the prose explanation, the semantic HTML
+ * "what changed" bullets, and the visuals (inline Before|After table, or —
+ * when inlineImages is false, e.g. the auth-walled base that camo can't proxy —
+ * compact image links). Appends to `lines`.
+ */
+function renderScreenBody(lines, r, { urlFor, inlineImages }) {
+  lines.push(r.explanation, '');
+
+  // Semantic diff of the HTML snapshots: what appeared / disappeared, in
+  // words — readable even when the pixel change is just a layout shift, and
+  // the way added/removed functionality shows up. (Text-only → stays in both
+  // inline and link modes.)
+  const hc = r.htmlChanges;
+  if (hc && (hc.added.length || hc.removed.length)) {
+    const CAP = 8;
+    lines.push('**What changed on the screen:**', '');
+    for (const l of hc.added.slice(0, CAP)) lines.push(`- ➕ \`${escapeMd(l)}\``);
+    if (hc.added.length > CAP) lines.push(`- ➕ …and ${hc.added.length - CAP} more added`);
+    for (const l of hc.removed.slice(0, CAP)) lines.push(`- ➖ \`${escapeMd(l)}\``);
+    if (hc.removed.length > CAP) lines.push(`- ➖ …and ${hc.removed.length - CAP} more removed`);
+    lines.push('');
+  }
+
+  // "After" carries drawn boxes around the changed regions when available — far
+  // more readable than the raw pixel overlay, which turns layout shifts into red
+  // soup. The raw overlay stays reachable as a link for the curious.
+  const baseUrl = r.base ? urlFor(joinDir('base', r.base.png)) : null;
+  const annUrl = r.annotatedPngName ? urlFor(`annotated/${r.annotatedPngName}`) : null;
+  const headUrl = r.head ? urlFor(joinDir('head', r.head.png)) : null;
+  const afterUrl = annUrl ?? headUrl;
+  const diffUrl = r.diffPngName ? urlFor(`diff/${r.diffPngName}`) : null;
+
+  if (inlineImages) {
+    // Image block: Before | After.
     if (baseUrl || afterUrl) {
       const headers = [baseUrl && 'Before', afterUrl && (annUrl ? 'After (changes boxed)' : 'After')].filter(Boolean);
       lines.push(`| ${headers.join(' | ')} |`);
@@ -98,13 +171,15 @@ export function renderComment({ report, explained, urlFor, galleryUrl, headSha, 
       lines.push(`| ${[baseUrl, afterUrl].filter(Boolean).map(cell).join(' | ')} |`);
     }
     if (diffUrl) lines.push('', `<sub>[raw pixel diff](${diffUrl})</sub>`);
-    lines.push('', '</details>');
-  });
-
-  renderCoverage(lines, { explained, coverage });
-
-  if (galleryUrl) lines.push('', `[Full gallery →](${galleryUrl})`);
-  return lines.join('\n');
+  } else {
+    // LINK-MODE: the auth-walled busano path — camo can't inline, so link the
+    // present images compactly instead of an <img> table.
+    const parts = [];
+    if (baseUrl) parts.push(`Before: [view](${baseUrl})`);
+    if (afterUrl) parts.push(`After: [view](${afterUrl})`);
+    if (diffUrl) parts.push(`[raw diff](${diffUrl})`);
+    if (parts.length) lines.push(`- ${parts.join(' · ')}`);
+  }
 }
 
 /**
