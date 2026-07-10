@@ -20,6 +20,7 @@
 import { readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gh } from './github.mjs';
+import { parseScreenFile, parseScreenKey, stripOrderPrefix } from './schema.mjs';
 
 const esc = (s) =>
   String(s)
@@ -39,6 +40,8 @@ const BADGE_CSS = {
   changed: 'background:#fee2e2;color:#991b1b',
   added: 'background:#dcfce7;color:#166534',
   removed: 'background:#f3f4f6;color:#4b5563',
+  desktop: 'background:#e0e7ff;color:#3730a3',
+  mobile: 'background:#f5f2fe;color:#6d28d9',
 };
 
 const badge = (label) =>
@@ -145,21 +148,36 @@ export function buildRootIndexHtml({ repo, branches, prs, states }) {
 /** Uploader results → page entries (paths relative to the pr-<n>/ dir). */
 export function entriesFromExplained(explained) {
   const strip = (p) => String(p).replace(/^\.\//, '');
-  return explained.map((r) => ({
-    key: r.key,
-    status: r.status,
-    explanation: r.explanation,
-    basePng: r.base?.png ? `base/${strip(r.base.png)}` : undefined,
-    headPng: r.head?.png ? `head/${strip(r.head.png)}` : undefined,
-    diffPng: r.diffPngName ? `diff/${r.diffPngName}` : undefined,
-    annotatedPng: r.annotatedPngName ? `annotated/${r.annotatedPngName}` : undefined,
-  }));
+  return explained.map((r) => {
+    // Viewport is authoritative on the diff RESULT object, not by parsing r.key
+    // (the writer already stamped '@mobile' onto the png/diff/annotated paths).
+    const viewport = r.head?.viewport ?? r.base?.viewport ?? 'desktop';
+    const { section, name } = parseScreenKey(r.key);
+    return {
+      key: r.key,
+      baseKey: `${section}/${name}`,
+      viewport,
+      status: r.status,
+      explanation: r.explanation,
+      basePng: r.base?.png ? `base/${strip(r.base.png)}` : undefined,
+      headPng: r.head?.png ? `head/${strip(r.head.png)}` : undefined,
+      diffPng: r.diffPngName ? `diff/${r.diffPngName}` : undefined,
+      annotatedPng: r.annotatedPngName ? `annotated/${r.annotatedPngName}` : undefined,
+    };
+  });
 }
 
 /**
  * Reconstruct page entries by scanning an existing pr-<n>/ directory —
  * for backfilling PR dirs uploaded before this module existed. The numeric
  * `NN-` gallery prefix in base/head file names is not part of the screen key.
+ *
+ * Files are parsed with parseScreenFile, so a screen captured at two viewports
+ * ('dashboard/01-populated.png' + 'dashboard/01-populated@mobile.png') collapses
+ * to ONE logical entry (base key 'dashboard/populated') with two viewport
+ * variants — status is inferred PER viewport. Each returned entry is a flat
+ * per-viewport record (baseKey + viewport + png paths + status), the same shape
+ * entriesFromExplained yields, so buildPrIndexHtml groups both sources alike.
  */
 export async function entriesFromScan(prDir) {
   const tryList = async (sub) => {
@@ -169,39 +187,50 @@ export async function entriesFromScan(prDir) {
       return [];
     }
   };
-  const entries = new Map();
-  const entry = (key) => {
-    if (!entries.has(key)) entries.set(key, { key });
-    return entries.get(key);
+  // Keyed by baseKey + '\x00' + viewport → one variant per (logical screen, vp).
+  const variants = new Map();
+  const variant = (baseKey, name, viewport) => {
+    const k = `${baseKey}\x00${viewport}`;
+    if (!variants.has(k)) variants.set(k, { baseKey, name, viewport });
+    return variants.get(k);
+  };
+  const record = (d, sub, field) => {
+    if (!d.isFile()) return;
+    const rel = d.parentPath ? `${d.parentPath.split('/').pop()}/${d.name}` : d.name;
+    const { section, name, viewport } = parseScreenFile(rel);
+    if (!name) return;
+    const display = stripOrderPrefix(name);
+    const baseKey = section ? `${section}/${display}` : display;
+    variant(baseKey, display, viewport)[field] = `${sub}/${
+      d.parentPath && d.parentPath.split('/').pop() !== sub
+        ? `${d.parentPath.split('/').pop()}/`
+        : ''
+    }${d.name}`;
   };
   for (const d of await tryList('annotated')) {
-    const m = /^(.*)\.annotated\.png$/.exec(d.name);
-    if (d.isFile() && m) entry(m[1]).annotatedPng = `annotated/${d.name}`;
+    if (d.isFile() && d.name.endsWith('.png')) record(d, 'annotated', 'annotatedPng');
   }
   for (const d of await tryList('diff')) {
-    const m = /^(.*)\.diff\.png$/.exec(d.name);
-    if (d.isFile() && m) entry(m[1]).diffPng = `diff/${d.name}`;
+    if (d.isFile() && d.name.endsWith('.png')) record(d, 'diff', 'diffPng');
   }
   for (const sub of ['base', 'head']) {
     for (const d of await tryList(sub)) {
-      if (!d.isFile() || !d.name.endsWith('.png')) continue;
-      const area = d.parentPath ? d.parentPath.split('/').pop() : '';
-      const name = d.name.replace(/^\d+-/, '').replace(/\.png$/, '');
-      const key = area && area !== sub ? `${area}__${name}` : name;
-      entry(key)[`${sub}Png`] = `${sub}/${area && area !== sub ? `${area}/` : ''}${d.name}`;
+      if (d.isFile() && d.name.endsWith('.png')) record(d, sub, `${sub}Png`);
     }
   }
-  for (const e of entries.values()) {
-    e.status =
-      e.diffPng || e.annotatedPng
+  for (const v of variants.values()) {
+    v.status =
+      v.diffPng || v.annotatedPng
         ? 'changed'
-        : e.headPng && !e.basePng
+        : v.headPng && !v.basePng
           ? 'added'
-          : e.basePng && !e.headPng
+          : v.basePng && !v.headPng
             ? 'removed'
             : 'changed';
   }
-  return [...entries.values()].sort((a, b) => a.key.localeCompare(b.key));
+  return [...variants.values()].sort(
+    (a, b) => a.baseKey.localeCompare(b.baseKey) || a.viewport.localeCompare(b.viewport),
+  );
 }
 
 const figure = (label, png, emptyNote) =>
@@ -211,24 +240,77 @@ const figure = (label, png, emptyNote) =>
       : `<div class="empty">${esc(emptyNote)}</div>`
   }</figure>`;
 
-/** The per-PR gallery page (pure; no I/O). */
-export function buildPrIndexHtml({ repo, prNumber, info, entries }) {
-  const screens = entries
-    .map((e) => {
-      const links = [
-        e.diffPng ? `<a href="./${esc(e.diffPng)}">raw pixel diff</a>` : '',
-        e.annotatedPng && e.headPng ? `<a href="./${esc(e.headPng)}">after, without the box</a>` : '',
-      ]
-        .filter(Boolean)
-        .join(' · ');
-      return `<section>
-<h3>${badge(e.status ?? 'changed')} <code>${esc(e.key)}</code></h3>
+const deviceLabel = (vp) => (vp === 'desktop' ? '🖥 Desktop' : vp === 'mobile' ? '📱 Mobile' : vp);
+
+/**
+ * Order a screen's viewport variants Desktop-first, then alphabetically by
+ * viewport name (config order isn't available on a scanned/uploaded pr dir).
+ */
+const orderVariants = (vs) =>
+  [...vs].sort((a, b) => {
+    const rank = (vp) => (vp === 'desktop' ? '' : vp || 'desktop');
+    return rank(a.viewport).localeCompare(rank(b.viewport));
+  });
+
+/**
+ * Group flat per-viewport entries into logical screens keyed by baseKey.
+ * Preserves first-seen order of base keys. Legacy entries with no baseKey
+ * fall back to their `key` (desktop-only, no toggle).
+ */
+function groupByScreen(entries) {
+  const groups = new Map(); // baseKey → { baseKey, variants: [] }
+  for (const e of entries) {
+    const baseKey = e.baseKey ?? e.key;
+    let g = groups.get(baseKey);
+    if (!g) {
+      g = { baseKey, variants: [] };
+      groups.set(baseKey, g);
+    }
+    g.variants.push({ ...e, viewport: e.viewport ?? 'desktop' });
+  }
+  return [...groups.values()].map((g) => ({ ...g, variants: orderVariants(g.variants) }));
+}
+
+/** One viewport variant → the Before/After pair + its raw-diff links. */
+function renderVariant(e, active) {
+  const links = [
+    e.diffPng ? `<a href="./${esc(e.diffPng)}">raw pixel diff</a>` : '',
+    e.annotatedPng && e.headPng ? `<a href="./${esc(e.headPng)}">after, without the box</a>` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return `<div class="viewport-panel${active ? ' active' : ''}" data-viewport="${esc(e.viewport)}">
 ${e.explanation ? `<p class="what">${prose(e.explanation)}</p>` : ''}
 <div class="pair">
 ${figure('Before', e.basePng, 'New screen — no previous version')}
 ${figure('After (changes boxed)', e.annotatedPng ?? e.headPng, 'Screen removed')}
 </div>
 ${links ? `<p class="links">${links}</p>` : ''}
+</div>`;
+}
+
+/** The per-PR gallery page (pure; no I/O). */
+export function buildPrIndexHtml({ repo, prNumber, info, entries }) {
+  const groups = groupByScreen(entries);
+  const screens = groups
+    .map((g) => {
+      const multi = g.variants.length > 1;
+      const tabs = multi
+        ? `<div class="devices" role="tablist">${g.variants
+            .map(
+              (v, i) =>
+                `<button type="button" class="device-tab" data-viewport="${esc(v.viewport)}" aria-selected="${i === 0 ? 'true' : 'false'}">${esc(deviceLabel(v.viewport))}</button>`,
+            )
+            .join('')}</div>`
+        : '';
+      // The header badge summarizes the screen: its first variant's status, plus
+      // a device badge per viewport present so the mix is visible at a glance.
+      const deviceBadges = g.variants.map((v) => badge(v.viewport)).join(' ');
+      const panels = g.variants.map((v, i) => renderVariant(v, i === 0)).join('\n');
+      return `<section class="screen">
+<h3>${badge(g.variants[0].status ?? 'changed')} <code>${esc(g.baseKey)}</code> ${deviceBadges}</h3>
+${tabs}
+${panels}
 </section>`;
     })
     .join('\n');
@@ -246,8 +328,30 @@ ${links ? `<p class="links">${links}</p>` : ''}
   .links a{text-decoration:underline;color:#52525b}
   .crumbs{font-size:13px;color:#71717a;margin:0 0 20px}
   .crumbs a{text-decoration:underline}
+  /* Per-screen device toggle: tabs switch which viewport-panel .pair is shown. */
+  .devices{display:flex;gap:6px;margin:0 0 14px;flex-wrap:wrap}
+  .device-tab{font-size:12px;border:1px solid #e4e4e7;border-radius:999px;padding:3px 12px;background:#fff;color:#71717a;cursor:pointer;line-height:1.4}
+  .device-tab[aria-selected="true"]{border-color:#6d28d9;color:#6d28d9;background:#f5f2fe;font-weight:600}
+  .device-tab:hover{border-color:#6d28d9}
+  .viewport-panel{display:none}
+  .viewport-panel.active{display:block}
 `;
-  return `<!doctype html><meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>PR #${prNumber} visual diff — ${esc(repo)}</title>\n<style>${PAGE_CSS}${extraCss}</style>\n<main>\n<p class="crumbs"><a href="../index.html">← all previews</a></p>\n<h1>${info ? badge(info.state) : ''} PR #${prNumber}${info?.title ? ` — ${esc(info.title)}` : ''}</h1>\n<p class="sub">${entries.length} screen${entries.length === 1 ? '' : 's'} · <a class="ext" href="https://github.com/${esc(repo)}/pull/${prNumber}" style="text-decoration:underline">view the pull request on GitHub ↗</a></p>\n${screens || '<p class="sub">No images in this PR folder.</p>'}\n<footer>Image set behind PR #${prNumber}'s visual-diff comment. Generated by <a href="https://github.com/SkuratovichA/viprection">viprection</a>.</footer>\n</main>`;
+  // The toggle: each .devices tab strip switches its sibling .viewport-panel[s].
+  const toggleJs = `
+  document.querySelectorAll('.devices').forEach((tabs) => {
+    const screen = tabs.closest('.screen');
+    const panels = screen ? screen.querySelectorAll('.viewport-panel') : [];
+    tabs.querySelectorAll('.device-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const vp = tab.dataset.viewport;
+        tabs.querySelectorAll('.device-tab').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+        panels.forEach((p) => p.classList.toggle('active', p.dataset.viewport === vp));
+      });
+    });
+  });`;
+  // Count LOGICAL screens (base keys), not per-viewport device rows.
+  const screenCount = groups.length;
+  return `<!doctype html><meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>PR #${prNumber} visual diff — ${esc(repo)}</title>\n<style>${PAGE_CSS}${extraCss}</style>\n<main>\n<p class="crumbs"><a href="../index.html">← all previews</a></p>\n<h1>${info ? badge(info.state) : ''} PR #${prNumber}${info?.title ? ` — ${esc(info.title)}` : ''}</h1>\n<p class="sub">${screenCount} screen${screenCount === 1 ? '' : 's'} · <a class="ext" href="https://github.com/${esc(repo)}/pull/${prNumber}" style="text-decoration:underline">view the pull request on GitHub ↗</a></p>\n${screens || '<p class="sub">No images in this PR folder.</p>'}\n<footer>Image set behind PR #${prNumber}'s visual-diff comment. Generated by <a href="https://github.com/SkuratovichA/viprection">viprection</a>.</footer>\n${screens ? `<script>${toggleJs}</script>` : ''}\n</main>`;
 }
 
 /** Write pr-<n>/index.html into an uploaded PR image directory. */
