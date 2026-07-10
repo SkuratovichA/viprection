@@ -130,6 +130,55 @@ test('a failed capture at one viewport shows a failure note, not an <img>', () =
   assert.match(html, /data-viewport="mobile"/, 'the failed viewport still gets a tab');
 });
 
+test('FIX 1: a mobile shot carries a phone-width class and .shot is height-capped with a fade', () => {
+  const html = renderGalleryHtml(multiViewportManifest());
+  // The mobile variant's shot is marked so CSS can size it to a phone width.
+  assert.match(
+    html,
+    /<a class="shot shot--mobile"[^>]*data-lightbox="auth\/home@mobile\.png"/,
+    'the mobile shot gets the shot--mobile class'
+  );
+  // The desktop shot is NOT phone-constrained.
+  assert.match(html, /<a class="shot"[^>]*data-lightbox="auth\/home\.png"/, 'desktop shot stays the wide .shot');
+  // The phone-width constraint is present in CSS.
+  assert.match(html, /\.shot--mobile\s*\{[^}]*max-width:\s*390px/, 'shot--mobile caps at phone width');
+  // The on-page shot height is capped (lightbox still shows the full image).
+  assert.match(html, /\.shot\s*\{[^}]*max-height:\s*70vh/, '.shot caps its displayed height');
+  assert.match(html, /\.shot::after\s*\{[^}]*linear-gradient/, 'a bottom fade hints there is more');
+  // The lightbox keeps its own scroll so the FULL untruncated image is viewable.
+  assert.match(html, /#lightbox\s*\{[^}]*overflow:\s*auto/, 'lightbox scrolls the full image');
+});
+
+test('FIX 2: device tabs are grouped separately from the HTML preview button', () => {
+  const html = renderGalleryHtml(multiViewportManifest());
+  // A .shot-toolbar wraps the two so they share one flex row without colliding.
+  assert.ok(html.includes('class="shot-toolbar"'), 'a shot-toolbar row exists');
+  // The device tabs live in their own .device-tabs group…
+  assert.match(html, /<div class="device-tabs"><div class="devices"/, 'tabs are inside a .device-tabs group');
+  // …distinct from the .html-buttons group that carries the .btn.
+  assert.match(
+    html,
+    /<div class="html-buttons">.*class="btn"[^>]*>Open HTML preview/s,
+    'the HTML button is in its own .html-buttons group'
+  );
+  // The .btn is not nested inside the .device-tabs group (they are separated).
+  assert.doesNotMatch(html, /<div class="device-tabs">[^]*?class="btn"[^]*?<\/div><div class="html-buttons">/,
+    'the button is not inside the device-tabs group');
+});
+
+test('FIX 3: sections are collapsible <details> with a persisted + collapse/expand-all control', () => {
+  const html = renderGalleryHtml(multiViewportManifest());
+  // Each section is a collapsible <details class="area"> with a <summary> head.
+  assert.match(html, /<details class="area" id="auth">/, 'section is a collapsible <details>');
+  assert.match(html, /<summary class="area-head">/, 'the section header is a <summary>');
+  // A Collapse all / Expand all control exists near the filter.
+  assert.match(html, /id="expand-all"[^>]*>Expand all</, 'Expand all control present');
+  assert.match(html, /id="collapse-all"[^>]*>Collapse all</, 'Collapse all control present');
+  // The inline script persists per-section state in localStorage.
+  assert.ok(html.includes('localStorage'), 'section state is persisted via localStorage');
+  assert.ok(html.includes('gallery.section.'), 'localStorage keys are namespaced per section');
+});
+
 test('escapeHtml and miniMarkdown are re-exported and behave', () => {
   assert.equal(escapeHtml('<a & "b">'), '&lt;a &amp; &quot;b&quot;&gt;');
   const md = miniMarkdown('**bold** and `code`\n\n- one\n- two');

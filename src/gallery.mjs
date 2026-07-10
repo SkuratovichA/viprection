@@ -146,18 +146,19 @@ export function renderGalleryHtml(manifest) {
   const main = sections
     .map(
       (sec) => `
-    <section class="area" id="${sec.id}">
-      <header class="area-head">
+    <details class="area" id="${sec.id}">
+      <summary class="area-head">
+        <span class="caret" aria-hidden="true">▶</span>
         <h2>${escapeHtml(sec.title)}</h2>
         <div class="area-intro">${miniMarkdown(sec.intro)}</div>
-        ${
-          sec.backendNotes
-            ? `<details class="backend"><summary>⚙️ Behind the scenes (backend)</summary>${miniMarkdown(sec.backendNotes)}</details>`
-            : ''
-        }
-      </header>
+      </summary>
+      ${
+        sec.backendNotes
+          ? `<details class="backend"><summary>⚙️ Behind the scenes (backend)</summary>${miniMarkdown(sec.backendNotes)}</details>`
+          : ''
+      }
       ${sec.groups.map((g) => renderScreen(sec, g)).join('\n')}
-    </section>`
+    </details>`
     )
     .join('\n');
 
@@ -183,9 +184,19 @@ export function renderGalleryHtml(manifest) {
   .badge-failed { color:#dc2626; margin-right:6px; }
   main { padding:28px 36px; max-width:1200px; }
   .area { margin-bottom:48px; }
-  .area-head h2 { font-size:22px; margin:0 0 6px; }
+  /* Collapsible section: <details> is SSR-safe + no-JS-degradable. The header
+     row (h2 + intro) lives in <summary>; the screens are the body. */
+  .area > summary.area-head { list-style:none; cursor:pointer; }
+  .area > summary.area-head::-webkit-details-marker { display:none; }
+  .area-head { display:block; position:relative; padding-left:26px; }
+  .area-head .caret { position:absolute; left:0; top:2px; color:var(--mut); font-size:14px; transition:transform .15s ease; user-select:none; }
+  .area[open] > .area-head .caret { transform:rotate(90deg); }
+  .area-head h2 { font-size:22px; margin:0 0 6px; display:inline-block; }
   .area-intro { color:var(--mut); max-width:75ch; }
   .area-intro p { margin:6px 0; }
+  .gallery-controls { display:flex; gap:8px; margin:0 8px 12px; }
+  .gallery-controls button { flex:1; font-size:12px; border:1px solid var(--line); border-radius:6px; padding:5px 8px; background:var(--panel); color:var(--mut); cursor:pointer; }
+  .gallery-controls button:hover { border-color:var(--acc); color:var(--acc); }
   details.backend { margin:10px 0 0; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:10px 14px; max-width:85ch; }
   details.backend summary { cursor:pointer; font-weight:600; font-size:13px; }
   details.backend ul { margin:8px 0; padding-left:20px; }
@@ -200,15 +211,32 @@ export function renderGalleryHtml(manifest) {
   .caption { color:var(--mut); margin:6px 0 4px; max-width:80ch; }
   .details { font-size:14px; line-height:1.6; max-width:80ch; }
   .details ul { padding-left:20px; }
-  /* Per-viewport device toggle: tabs above the shot, one <img> shown at a time. */
-  .devices { display:flex; gap:6px; margin:10px 0 0; flex-wrap:wrap; }
+  /* Per-viewport device toggle: tabs above the shot, one <img> shown at a time.
+     The toolbar keeps the device tabs (left) and the HTML button (right) on one
+     flex row with a gap; row-gap keeps them apart if they wrap on a narrow view
+     instead of the two touching lines they used to collapse into. */
+  .shot-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px 16px; flex-wrap:wrap; margin:12px 0 0; }
+  .device-tabs { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .devices { display:flex; gap:6px; margin:0; flex-wrap:wrap; }
+  /* Per-viewport HTML-button slots: only the active viewport's button shows,
+     kept in sync with the device tabs by the toggle script. */
+  .html-buttons { display:flex; gap:8px; }
+  .html-btn-slot { display:none; }
+  .html-btn-slot.active { display:inline-flex; }
   .device-tab { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:3px 12px; background:var(--panel); color:var(--mut); cursor:pointer; line-height:1.4; }
   .device-tab[aria-selected="true"] { border-color:var(--acc); color:var(--acc); background:#f5f2fe; font-weight:600; }
   .device-tab:hover { border-color:var(--acc); }
   .viewport-panel { display:none; }
   .viewport-panel.active { display:block; }
-  .shot { display:block; margin-top:10px; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; max-width:960px; }
+  /* Shots are FULL-PAGE (very tall). Clip the on-page display height and hint
+     'there's more' with a bottom fade; click opens the untruncated image in the
+     lightbox (which scrolls). Desktop caps at ~960px wide; a mobile shot is a
+     retina PNG (~780px natural) shown at its LOGICAL phone width so it reads as
+     a phone, not a giant column. */
+  .shot { position:relative; display:block; margin-top:10px; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; max-width:960px; max-height:70vh; }
   .shot img { width:100%; height:auto; display:block; }
+  .shot::after { content:""; position:absolute; left:0; right:0; bottom:0; height:56px; pointer-events:none; background:linear-gradient(to bottom, rgba(255,255,255,0), var(--panel)); }
+  .shot--mobile { max-width:390px; }
   .failed-note { color:#dc2626; font-size:13px; border:1px dashed #fca5a5; border-radius:8px; padding:8px 12px; max-width:60ch; margin-top:10px; }
   #lightbox { position:fixed; inset:0; background:rgba(10,10,14,.92); display:none; align-items:flex-start; justify-content:center; overflow:auto; padding:32px; z-index:50; }
   #lightbox.open { display:flex; }
@@ -222,13 +250,68 @@ export function renderGalleryHtml(manifest) {
     <h1>${escapeHtml(manifest.project)}</h1>
     <div class="meta">${totalScreens} screens · generated ${escapeHtml(manifest.generatedAt)}</div>
     <input id="filter" type="search" placeholder="Filter screens…" />
+    <div class="gallery-controls">
+      <button type="button" id="expand-all">Expand all</button>
+      <button type="button" id="collapse-all">Collapse all</button>
+    </div>
     ${sidebar}
   </nav>
   <main>${main}</main>
 </div>
 <div id="lightbox"><img alt="zoom" /></div>
 <script>
+  // ---- Collapsible sections (persisted in localStorage) ------------------
+  // Each <details class="area" id="…"> remembers its open/closed state under a
+  // key derived from the section id. Default (nothing stored): first section
+  // expanded, the rest collapsed — best for a 40+ screen catalog where an
+  // all-open page is an endless scroll.
+  const LS_PREFIX = 'gallery.section.';
+  const areas = [...document.querySelectorAll('details.area')];
+  const lsKey = (id) => LS_PREFIX + id;
+  function readStored(id) {
+    try { return localStorage.getItem(lsKey(id)); } catch { return null; }
+  }
+  function writeStored(id, open) {
+    try { localStorage.setItem(lsKey(id), open ? 'open' : 'closed'); } catch { /* private mode */ }
+  }
+  // Apply persisted (or default) state on load, then keep storage in sync when
+  // the user toggles a section directly.
+  areas.forEach((area, i) => {
+    const stored = readStored(area.id);
+    area.open = stored ? stored === 'open' : i === 0;
+    area.addEventListener('toggle', () => {
+      // Ignore toggles the filter drives (it sets .dataset.filterForced).
+      if (area.dataset.filterForced) return;
+      writeStored(area.id, area.open);
+    });
+  });
+
+  const expandAllBtn = document.getElementById('expand-all');
+  const collapseAllBtn = document.getElementById('collapse-all');
+  function setAll(open) {
+    areas.forEach((area) => {
+      delete area.dataset.filterForced;
+      area.open = open;
+      writeStored(area.id, open);
+    });
+  }
+  if (expandAllBtn) expandAllBtn.addEventListener('click', () => setAll(true));
+  if (collapseAllBtn) collapseAllBtn.addEventListener('click', () => setAll(false));
+
+  // ---- Live filter -------------------------------------------------------
+  // While filtering, a section's open state is driven by whether it has a
+  // match (so matches are never hidden inside a collapsed section). When the
+  // filter clears we restore each section's persisted/default state.
   const filter = document.getElementById('filter');
+  // Map section id → its main <details> for cross-linking sidebar ↔ main.
+  const areaById = new Map(areas.map((a) => [a.id, a]));
+  function restoreStoredOpen() {
+    areas.forEach((area, i) => {
+      delete area.dataset.filterForced;
+      const stored = readStored(area.id);
+      area.open = stored ? stored === 'open' : i === 0;
+    });
+  }
   filter.addEventListener('input', () => {
     const q = filter.value.trim().toLowerCase();
     document.querySelectorAll('.nav-item').forEach((el) => {
@@ -237,12 +320,22 @@ export function renderGalleryHtml(manifest) {
     document.querySelectorAll('.nav-section').forEach((sec) => {
       const any = [...sec.querySelectorAll('.nav-item')].some((el) => !el.classList.contains('hidden'));
       sec.classList.toggle('hidden', !any);
+      // Drive the matching main-column section open so matches are reachable.
+      const area = areaById.get(sec.dataset.section);
+      if (!area) return;
+      if (q === '') return; // restored below in one shot
+      area.dataset.filterForced = '1';
+      area.open = any;
     });
+    if (q === '') restoreStoredOpen();
   });
-  // Device toggle: tabs share a .devices group with sibling .viewport-panel[s].
+  // Device toggle: the .devices tab strip drives the sibling .viewport-panel[s]
+  // AND the per-viewport .html-btn-slot in the same .screen, so switching device
+  // swaps both the shot and its (viewport-specific) HTML-preview button.
   document.querySelectorAll('.devices').forEach((tabs) => {
     const article = tabs.closest('.screen');
     const panels = article ? article.querySelectorAll('.viewport-panel') : [];
+    const btnSlots = article ? article.querySelectorAll('.html-btn-slot') : [];
     tabs.querySelectorAll('.device-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
         const vp = tab.dataset.viewport;
@@ -251,6 +344,9 @@ export function renderGalleryHtml(manifest) {
         });
         panels.forEach((p) => {
           p.classList.toggle('active', p.dataset.viewport === vp);
+        });
+        btnSlots.forEach((s) => {
+          s.classList.toggle('active', s.dataset.viewport === vp);
         });
       });
     });
@@ -286,20 +382,39 @@ function renderScreen(sec, g) {
         .join('')}</div>`
     : '';
 
+  // The HTML preview button is per-variant (only variants with `v.html` get
+  // one — desktop-only today, per-viewport soon). Each lives in its own
+  // per-viewport wrapper so it shows/hides in lock-step with the active shot,
+  // sitting on the RIGHT of the toolbar while the device tabs sit on the LEFT —
+  // the two never collide (they used to wrap into two touching lines).
+  const htmlButtons = g.variants
+    .map((v, i) => {
+      const vp = entryViewport(v);
+      if (!v.html) return '';
+      const active = i === 0 ? ' active' : '';
+      return `<span class="html-btn-slot${active}" data-viewport="${escapeHtml(vp)}"><a class="btn" href="${v.html}" target="_blank" rel="noreferrer">Open HTML preview</a></span>`;
+    })
+    .join('');
+
+  // Toolbar renders when there's anything to put in it (tabs and/or a button).
+  const toolbar =
+    tabs || htmlButtons
+      ? `<div class="shot-toolbar">
+          <div class="device-tabs">${tabs}</div>
+          <div class="html-buttons">${htmlButtons}</div>
+        </div>`
+      : '';
+
   const panels = g.variants
     .map((v, i) => {
       const vp = entryViewport(v);
       const active = i === 0 ? ' active' : '';
+      const shotClass = vp === 'mobile' ? 'shot shot--mobile' : 'shot';
       const shot =
         v.status === 'failed'
           ? `<div class="failed-note">Capture failed for this state${v.failureReason ? `: ${escapeHtml(v.failureReason)}` : ' — see the run log.'}</div>`
-          : `<a class="shot" href="${v.png}" data-lightbox="${v.png}"><img loading="lazy" src="${v.png}" alt="${escapeHtml(`${g.name} — ${deviceLabel(vp)}`)}" /></a>`;
-      // 'Open HTML preview' is desktop-only (mobile entries have no html).
-      const htmlBtn = v.html
-        ? `<a class="btn" href="${v.html}" target="_blank" rel="noreferrer">Open HTML preview</a>`
-        : '';
+          : `<a class="${shotClass}" href="${v.png}" data-lightbox="${v.png}"><img loading="lazy" src="${v.png}" alt="${escapeHtml(`${g.name} — ${deviceLabel(vp)}`)}" /></a>`;
       return `<div class="viewport-panel${active}" data-viewport="${escapeHtml(vp)}" role="tabpanel">
-          ${htmlBtn ? `<div class="panel-head">${htmlBtn}</div>` : ''}
           ${shot}
         </div>`;
     })
@@ -314,7 +429,7 @@ function renderScreen(sec, g) {
         </div>
         <p class="caption">${escapeHtml(rep.caption)}</p>
         ${rep.details ? `<div class="details">${miniMarkdown(rep.details)}</div>` : ''}
-        ${tabs}
+        ${toolbar}
         ${panels}
       </article>`;
 }
