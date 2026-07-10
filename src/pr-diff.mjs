@@ -22,6 +22,43 @@ import { renderComment, MARKER } from './comment.mjs';
 import { resolveBase as resolveBaseImpl } from './resolve-base.mjs';
 import { manifestViewports, screenKeyToFilename } from './schema.mjs';
 
+/**
+ * Resolve the "[Full gallery →]" link for the BASE branch — the browsable
+ * gallery a reviewer opens, NOT a raw git tree. Mirrors publish.mjs's
+ * `galleryUrl` (publicBaseUrl → `${base}/${branch}/index.html`, else the tree
+ * path) so a mirrored repo's link points at the CloudFront/S3 gallery, not
+ * github.com/<repo>/tree/<pages>/<base>.
+ *
+ * Tiers, most-authoritative first:
+ *   1. cfg.publicBaseUrl (config)   → `${base}/${baseRef}/index.html`
+ *   2. envUrl (VP_GALLERY_URL)      → the action-provided value (fine for Pages)
+ *   3. constructed tree path        → serverUrl/owner/name/tree/pagesBranch/baseRef
+ *
+ * The tree path is a benign default when no publicBaseUrl AND no env value are
+ * present — but that's a genuine gap (the action normally sets VP_GALLERY_URL),
+ * so warn ONCE when BOTH are absent. A missing envUrl alone (with a
+ * publicBaseUrl present) is expected → no warn.
+ *
+ * publish.mjs owns an equivalent `galleryUrl`; it's the colleague's file so it
+ * is NOT edited here — it could later dedupe against this exported helper.
+ *
+ * NOTE: publish.mjs resolves the SOURCE branch; here it's the BASE branch, so
+ * the two helpers can't be merged verbatim (different branch input).
+ */
+export function resolveGalleryUrl({ cfg, baseRef, envUrl, serverUrl, repo, pagesBranch }) {
+  if (cfg?.publicBaseUrl) {
+    return `${String(cfg.publicBaseUrl).replace(/\/+$/, '')}/${baseRef}/index.html`;
+  }
+  if (envUrl) return envUrl;
+  // No config mirror AND no action-provided URL — construct the tree path and
+  // warn once, since the action normally injects VP_GALLERY_URL.
+  console.warn(
+    '[pr-diff] no publicBaseUrl and no VP_GALLERY_URL — falling back to the constructed github tree path for the gallery link'
+  );
+  const [owner, name] = String(repo || '/').split('/');
+  return `${serverUrl || 'https://github.com'}/${owner}/${name}/tree/${pagesBranch}/${baseRef}`;
+}
+
 async function getChangedFiles(baseRef) {
   try {
     const { execFileSync } = await import('node:child_process');
@@ -180,11 +217,20 @@ export async function prDiff({
       ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
       : null;
 
+  const galleryUrl = resolveGalleryUrl({
+    cfg,
+    baseRef,
+    envUrl: process.env.VP_GALLERY_URL,
+    serverUrl: process.env.GITHUB_SERVER_URL,
+    repo: process.env.GITHUB_REPOSITORY,
+    pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
+  });
+
   const md = renderComment({
     report,
     explained,
     urlFor,
-    galleryUrl: process.env.VP_GALLERY_URL,
+    galleryUrl,
     headSha: process.env.GITHUB_SHA,
     readOnly: isFork || !postComment,
     coverage,

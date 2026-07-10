@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
-import { prDiff } from '../src/pr-diff.mjs';
+import { prDiff, resolveGalleryUrl } from '../src/pr-diff.mjs';
 
 function solidPng(w, h, [r, g, b]) {
   const png = new PNG({ width: w, height: h });
@@ -160,6 +160,66 @@ test('prDiff TRUSTS VP_BASE_MODE from prepare-base and does not re-resolve', asy
   }
   assert.equal(resolveCalled, false, 'must NOT re-run resolveBase when VP_BASE_MODE is set');
   assert.ok(posted, 'should diff + post using the trusted base');
+});
+
+// ---------------------------------------------------------------------------
+// resolveGalleryUrl: the "[Full gallery →]" link must resolve through the public
+// base (mirror publish.mjs), not a hardcoded raw git-tree URL.
+// ---------------------------------------------------------------------------
+
+test('resolveGalleryUrl: publicBaseUrl wins → <base>/<baseRef>/index.html', () => {
+  const url = resolveGalleryUrl({
+    cfg: { publicBaseUrl: 'https://cdn.example.com/previews/' }, // trailing slash trimmed
+    baseRef: 'main',
+    envUrl: 'https://github.com/o/r/tree/previews/main', // must be IGNORED
+    serverUrl: 'https://github.com',
+    repo: 'o/r',
+    pagesBranch: 'previews',
+  });
+  assert.equal(url, 'https://cdn.example.com/previews/main/index.html');
+});
+
+test('resolveGalleryUrl: no publicBaseUrl → VP_GALLERY_URL env value is used verbatim', () => {
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  let url;
+  try {
+    url = resolveGalleryUrl({
+      cfg: {},
+      baseRef: 'main',
+      envUrl: 'https://github.com/o/r/tree/previews/main',
+      serverUrl: 'https://github.com',
+      repo: 'o/r',
+      pagesBranch: 'previews',
+    });
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(url, 'https://github.com/o/r/tree/previews/main');
+  assert.equal(warns.length, 0, 'a present env URL is the expected Pages default — no warn');
+});
+
+test('resolveGalleryUrl: neither publicBaseUrl nor env → constructed tree path + one warn', () => {
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  let url;
+  try {
+    url = resolveGalleryUrl({
+      cfg: {},
+      baseRef: 'develop',
+      envUrl: undefined,
+      serverUrl: 'https://github.example.com',
+      repo: 'acme/widgets',
+      pagesBranch: 'gh-previews',
+    });
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(url, 'https://github.example.com/acme/widgets/tree/gh-previews/develop');
+  assert.equal(warns.length, 1, 'both sources absent is a genuine gap → warn once');
+  assert.ok(warns[0].includes('no publicBaseUrl and no VP_GALLERY_URL'));
 });
 
 // ---------------------------------------------------------------------------
