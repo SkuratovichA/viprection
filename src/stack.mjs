@@ -19,10 +19,73 @@
  * secrets are already in the workflow env and inherited as-is.
  */
 import { readFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { normalizeHealthcheck } from './config-schema.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** PIDs currently LISTENING on a local TCP port (lsof; [] when none/unavailable). */
+function listenerPids(port) {
+  try {
+    return execFileSync('lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+  } catch {
+    return []; // no listener, or no lsof — either way nothing to kill
+  }
+}
+
+/**
+ * Free every LOCAL port a healthcheck targets before running `up`.
+ *
+ * Why: a prior lifecycle in the same job (the fresh BASE capture) tears down
+ * with the project's `down`, but pattern-based pkills miss detached children —
+ * e.g. `pkill -f '@blrplt/…'` kills the pnpm wrapper while the spawned vite
+ * keeps the port. The next `up` then starts vite on port+1 ("Port 3000 is in
+ * use, trying another one…") and the healthcheck polls a zombie forever.
+ * Killing the survivors here (loudly) makes head-up deterministic regardless
+ * of how thorough each project's `down` is. Only localhost listeners are
+ * touched — remote healthcheck URLs are ignored.
+ */
+export async function freeHealthcheckPorts(cfg) {
+  const ports = new Set();
+  for (const hc of cfg.healthchecks ?? []) {
+    try {
+      const url = new URL(normalizeHealthcheck(hc).url);
+      if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)) {
+        ports.add(Number(url.port || (url.protocol === 'https:' ? 443 : 80)));
+      }
+    } catch {
+      /* malformed URL is the healthcheck's problem, not ours */
+    }
+  }
+  for (const port of ports) {
+    // Never kill our own process (or pid 0 = the whole process group): a
+    // listener inside THIS process isn't a leftover — it's the caller (e.g. a
+    // test's in-process healthcheck mock).
+    let pids = listenerPids(port).filter((pid) => {
+      const n = Number(pid);
+      return Number.isInteger(n) && n > 0 && n !== process.pid;
+    });
+    if (pids.length === 0) continue;
+    console.warn(
+      `[stack] port ${port} already in use by pid(s) ${pids.join(', ')} — killing leftovers from a previous lifecycle (survivors push the app to another port and the healthcheck polls a zombie)`
+    );
+    for (const pid of pids) {
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+    await sleep(500);
+    pids = listenerPids(port).filter((pid) => Number(pid) !== process.pid);
+    if (pids.length > 0) {
+      console.warn(`[stack] port ${port} STILL busy after kill (pids ${pids.join(', ')})`);
+    }
+  }
+}
 
 async function loadConfig() {
   const path = process.env.VP_CONFIG_PATH || 'visual-preview.config.json';
@@ -83,6 +146,7 @@ export async function waitForHealth(hcRaw) {
 export async function up() {
   const cfg = await loadConfig();
   const env = cfg.env ?? {};
+  await freeHealthcheckPorts(cfg);
   console.log(`[stack] up: ${cfg.up}`);
   await run(cfg.up, env);
 
