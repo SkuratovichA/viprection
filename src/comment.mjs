@@ -122,7 +122,7 @@ export function renderComment({ report, explained, urlFor, galleryUrl, headSha, 
     lines.push('', '</details>');
   });
 
-  renderCoverage(lines, { explained, coverage });
+  renderCoverage(lines, { coverage });
 
   if (galleryUrl) lines.push('', `[Full gallery →](${galleryUrl})`);
   return lines.join('\n');
@@ -187,7 +187,7 @@ function renderScreenBody(lines, r, { urlFor, inlineImages }) {
  * enrichment bot): tell the PR author exactly what the visual layer could NOT
  * see, so gaps get fixed as part of the PR instead of rotting silently.
  */
-function renderCoverage(lines, { explained, coverage }) {
+function renderCoverage(lines, { coverage }) {
   if (!coverage) return;
   const { uncoveredChangedFiles = [], autoScreens = [], paramRoutes = [] } = coverage;
   if (!uncoveredChangedFiles.length && !autoScreens.length && !paramRoutes.length) return;

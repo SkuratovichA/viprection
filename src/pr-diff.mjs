@@ -109,7 +109,7 @@ export async function prDiff({
   try {
     const { annotatePng } = await import('./annotate.mjs');
     const { mkdir } = await import('node:fs/promises');
-    const { join, basename } = await import('node:path');
+    const { join } = await import('node:path');
     const annDir = join(process.env.RUNNER_TEMP || '/tmp', 'vp-annotated');
     await mkdir(annDir, { recursive: true });
     for (const r of explained) {
