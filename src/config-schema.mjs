@@ -44,6 +44,10 @@
  *                                   The default viewport MUST be named
  *                                   "desktop"; its screen keys stay unsuffixed
  *                                   (see src/schema.mjs — the key invariant).
+ * @property {string[]} [coverageIgnore]  Globs excluded from the coverage nag
+ *                                   even when they match uiGlobs (e.g. the
+ *                                   capture harness's own scripts — they gate
+ *                                   the run but are not screens).
  * @property {string} [publicBaseUrl]  Where the previews branch content is
  *                                   publicly served when it is NOT GitHub Pages
  *                                   (e.g. an S3/CloudFront mirror). Used to
@@ -131,6 +135,10 @@ export const CONFIG_JSON_SCHEMA = {
     // want a public Pages site).
     imageHosting: { enum: ['pages', 'artifact'] },
     publicBaseUrl: { type: 'string', pattern: '^https://' },
+    // Globs of files the coverage nag must ignore even when they match
+    // uiGlobs — typically the capture harness itself (its scripts change the
+    // pipeline, not any screen). Default: empty.
+    coverageIgnore: { type: 'array', items: { type: 'string' } },
     viewports: {
       type: 'array',
       minItems: 1,
