@@ -60,10 +60,34 @@ runner, which is where the checklist below matters.
       data the screenshots show.
 - [ ] **Private repo? Choose image hosting.** `raw.githubusercontent` URLs do
       **not** render in comments on private repos (GitHub's camo proxy fetches
-      anonymously → broken images). Either enable **GitHub Pages** on the previews
-      branch (the Pages site is public — fine for synthetic data), or set
-      `"imageHosting": "artifact"` to attach images as a run artifact and link to
-      it (nothing served publicly). See Gotcha #8.
+      anonymously → broken images). Three options, in preference order:
+      **GitHub Pages** on the previews branch (the Pages site is public — fine
+      for synthetic data); **your own mirror** of the previews branch (S3/
+      CloudFront etc.) advertised via `"publicBaseUrl"` — if it sits behind
+      auth, comments automatically degrade from inline images to links (the
+      action probes the base anonymously once); or `"imageHosting": "artifact"`
+      to attach images as a run artifact (nothing hosted at all — now mainly
+      the fork-PR fallback). See Gotcha #8 and #11.
+- [ ] **Mirroring the previews branch yourself? Mirror the WHOLE branch and do
+      it from the producing workflow.** Root landing + `<branch>/` galleries +
+      `pr-N/` share relative links, so a partial mirror (one subtree at the
+      bucket root) 404s everything else and a `--delete` sync wipes the rest.
+      And an `on: push: branches: [previews]` workflow will simply never fire:
+      the orphan previews branch contains no `.github/workflows`, and Actions
+      reads workflow definitions from the pushed ref (Gotcha #12). Run the
+      mirror as a job `needs:`-chained after the publish/diff jobs instead.
+      Directory URLs also need an index rewrite at your CDN edge —
+      `default_root_object` covers only the root (e.g. a 3-line uri rewrite in
+      the CloudFront Function that already does Basic auth).
+- [ ] **Capturing more than one viewport?** Declare the matrix once as config
+      `viewports` (the harness must read the config and iterate it — no
+      hardcoded sizes), keep the `NN-` ordering prefix **per screen** (not per
+      file), suffix non-desktop files/keys with `@<viewport>` via the schema
+      helpers, and emit HTML snapshots for desktop only. Screens that are
+      broken or meaningless on small widths get an honest per-entry
+      `viewports: ["desktop"]` opt-out — a cramped/overflowing mobile shot of a
+      non-responsive screen is a fact about the app, not a harness bug; track
+      it as product work.
 - [ ] **First run creates the baseline.** Merge the workflow to a tracked branch;
       the first push runs branch-mode and publishes `previews/<branch>`. Only then
       does a PR have a base to diff against. (Branch mode always publishes — it is
@@ -99,6 +123,17 @@ runner, which is where the checklist below matters.
     edits `.github/workflows/*` — and the REST API masks the real cause as a
     branch-policy error even with all checks green (only the GraphQL path names
     it). Fix: `gh auth refresh -s workflow`, or merge from the UI.
+11. **Comment images 404 behind your auth wall.** A `publicBaseUrl` mirror
+    behind Basic auth (a legitimate privacy choice) can never render inline
+    `<img>`s in PR comments — GitHub's camo proxy fetches anonymously and gets
+    the 401. The action detects this (one anonymous HEAD) and renders links
+    instead; don't fight it by weakening the auth.
+12. **Your `on: push: branches: [previews]` mirror workflow never runs.** The
+    orphan previews branch has no `.github/workflows/`, and Actions loads
+    workflow definitions from the pushed ref — so nothing triggers. Chain the
+    mirror after the producer jobs in the same workflow (`needs:` + an
+    `always() && result=='success'` guard covering both the branch and PR
+    paths).
 
 ## A working reference
 
