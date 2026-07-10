@@ -134,6 +134,20 @@ runner, which is where the checklist below matters.
     mirror after the producer jobs in the same workflow (`needs:` + an
     `always() && result=='success'` guard covering both the branch and PR
     paths).
+13. **Head-up polls a zombie: "Port 3000 is in use, trying another one…".**
+    The fresh BASE capture's teardown ran your `down`, but a pattern pkill
+    (`pkill -f '@yourscope/…'`) only kills the pnpm/npm wrapper — the detached
+    vite/next child survives and keeps the port, so the HEAD app boots on
+    port+1 and the healthcheck times out against the leftover. The action now
+    frees every local healthcheck port before `up` (loudly), so this can't
+    wedge a run anymore — but fix your `down` anyway (kill by port, not by
+    pattern) so local runs behave too.
+14. **The remaining diff flaps are generated IDs.** Once the clock and seed
+    are frozen, what's left flapping is randomness: UUIDs in URLs/labels,
+    random order numbers, replacement-order codes. The html-diff in the
+    comment makes them obvious (`➕ /marketplace/<uuid-a> ➖ /marketplace/<uuid-b>`).
+    Fix at the source when you can (seeded RNG for harness-generated ids);
+    mask the rest via `diff.maskSelectors` / `ignoreRegions`.
 
 ## A working reference
 
