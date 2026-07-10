@@ -25,6 +25,7 @@ import { execFileSync } from 'node:child_process';
 import { toolVersion, browserVersion } from './versions.mjs';
 import { writeRootIndex } from './index-pages.mjs';
 import { ensureNojekyll } from './github.mjs';
+import { renderGalleryHtml } from './gallery.mjs';
 
 function git(args, opts = {}) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim();
@@ -91,6 +92,22 @@ export async function publish({
   await rm(dest, { recursive: true, force: true });
   await mkdir(dest, { recursive: true });
   await cp(outputDir, dest, { recursive: true });
+
+  // A project's outputDir often carries a repo-side .gitignore (e.g. "ignore
+  // all generated content"). Copied onto the previews branch it would make the
+  // `git add -A` below silently skip the entire gallery — an empty publish
+  // that looks green. The previews branch owns its own ignore rules; drop it.
+  await rm(join(dest, '.gitignore'), { force: true });
+
+  // Bake the branch gallery page from the manifest with the SHARED renderer —
+  // presentation is owned here, not by each project's capture harness (the
+  // per-project templates had already drifted apart once).
+  try {
+    const manifest = JSON.parse(await readFile(join(dest, 'manifest.json'), 'utf8'));
+    await writeFile(join(dest, 'index.html'), renderGalleryHtml(manifest));
+  } catch (e) {
+    console.warn(`publish: gallery bake failed (${e.message}) — keeping the harness-rendered index.html if any`);
+  }
 
   // (Re)generate a tiny cross-branch landing index.
   await writeCrossBranchIndex(wt, repo);
