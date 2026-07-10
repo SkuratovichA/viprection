@@ -279,6 +279,46 @@ test('coverage: every correlated file counts as covered — only truly unrelated
   assert.ok(posted.includes(related[0]), 'top correlated files still appear in the prose');
 });
 
+test('coverage: coverageIgnore globs drop capture-harness files from the nag (not the gate)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-covign-'));
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  await gallery(baseDir, [200, 0, 0], 'dashboard');
+  await gallery(headDir, [0, 0, 200], 'dashboard'); // changed
+  await writeFile(join(root, 'cfg.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    coverageIgnore: ['packages/client/scripts/**', '**/gallery-template.*'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  process.env.RUNNER_TEMP = root;
+  process.env.GITHUB_STEP_SUMMARY = join(root, 'summary.md');
+  process.env.GITHUB_OUTPUT = join(root, 'out.txt');
+
+  // Two uncorrelated changed files: one is a real product file (should nag),
+  // one is a capture-harness script matched by coverageIgnore (must NOT nag).
+  const productFile = 'packages/client/src/features/billing/Invoice.tsx';
+  const harnessScript = 'packages/client/scripts/capture-screens.mjs';
+  const harnessTemplate = 'packages/client/e2e/catalog/gallery-template.ts';
+
+  let posted = null;
+  await prDiff({
+    configPath: join(root, 'cfg.json'),
+    resolveBase: async () => ({ mode: 'reuse', baseDir }),
+    postComment: async (md) => { posted = md; },
+    uploadImages: async () => (p) => `https://cdn/${p}`,
+    changedFiles: [productFile, harnessScript, harnessTemplate],
+    isFork: false,
+  });
+
+  assert.ok(posted, 'comment should be posted');
+  assert.ok(posted.includes('### 🧭 Coverage'), 'coverage section renders');
+  assert.ok(posted.includes('**1 changed UI file(s)'), 'only the product file is uncovered');
+  assert.ok(posted.includes(productFile), 'the product file is still nagged');
+  assert.ok(!posted.includes(harnessScript), 'the capture-harness script is exempt from the nag');
+  assert.ok(!posted.includes(harnessTemplate), 'the vendored gallery template is exempt from the nag');
+});
+
 // ---------------------------------------------------------------------------
 // Viewport-matrix wiring (Task 2): the head manifest now lists the same logical
 // screen once PER viewport. Coverage must not double-count, and the report must

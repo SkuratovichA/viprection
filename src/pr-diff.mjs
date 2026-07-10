@@ -202,7 +202,17 @@ export async function prDiff({
             .map((sc) => sc.route || sc.name)
         ),
       ];
-      const uiFiles = (changedFiles ?? []).filter((f) => (cfg.uiGlobs ?? []).some((g) => globMatch(g, f)));
+      // `coverageIgnore` exempts files from the coverage NAG only (not the gate:
+      // a change to a capture-harness script — the catalog spec, the gallery
+      // template — legitimately matches uiGlobs and should still trigger a run,
+      // but it drives no product screen, so nagging "matched no captured screen"
+      // for it is pure noise. gate.mjs never sees this list.
+      const coverageIgnore = cfg.coverageIgnore ?? [];
+      const uiFiles = (changedFiles ?? []).filter(
+        (f) =>
+          (cfg.uiGlobs ?? []).some((g) => globMatch(g, f)) &&
+          !coverageIgnore.some((g) => globMatch(g, f))
+      );
       const seen = new Set(explained.flatMap((r) => r.relatedFiles ?? []));
       const uncoveredChangedFiles = uiFiles.filter((f) => !seen.has(f));
       coverage = { uncoveredChangedFiles, autoScreens, paramRoutes };
