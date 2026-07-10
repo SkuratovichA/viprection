@@ -38,6 +38,34 @@
  * @property {string} [nodeVersion]  Node for the runner (default "22").
  * @property {DiffOptions} [diff]    Volatile-region handling for stable diffs.
  * @property {ClockOptions} [clock]  Deterministic clock (freeze Date.now).
+ * @property {Viewport[]} [viewports]  The capture viewport matrix — the single
+ *                                   source of truth the harness iterates over.
+ *                                   Absent = legacy single desktop 1440x900@2.
+ *                                   The default viewport MUST be named
+ *                                   "desktop"; its screen keys stay unsuffixed
+ *                                   (see src/schema.mjs — the key invariant).
+ * @property {string} [publicBaseUrl]  Where the previews branch content is
+ *                                   publicly served when it is NOT GitHub Pages
+ *                                   (e.g. an S3/CloudFront mirror). Used to
+ *                                   build gallery + PR-comment links. Takes
+ *                                   priority over Pages detection. If the URL
+ *                                   requires auth, comments degrade to links
+ *                                   (images can't render through camo).
+ */
+
+/**
+ * One capture viewport. `name` is a slug (^[a-z][a-z0-9-]*$); "desktop" is the
+ * reserved default. isMobile/hasTouch/userAgent map to the browser emulation
+ * knobs of the project's harness (Puppeteer page.emulate / Playwright devices).
+ *
+ * @typedef {Object} Viewport
+ * @property {string} name
+ * @property {number} width
+ * @property {number} height
+ * @property {number} [deviceScaleFactor]  default 2
+ * @property {boolean} [isMobile]
+ * @property {boolean} [hasTouch]
+ * @property {string} [userAgent]
  */
 
 /**
@@ -80,6 +108,8 @@
  * @property {number} x @property {number} y @property {number} w @property {number} h
  */
 
+import { normalizeViewports } from './schema.mjs';
+
 export const CONFIG_JSON_SCHEMA = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   type: 'object',
@@ -100,6 +130,25 @@ export const CONFIG_JSON_SCHEMA = {
     // link to it — nothing is served publicly (use for private repos that don't
     // want a public Pages site).
     imageHosting: { enum: ['pages', 'artifact'] },
+    publicBaseUrl: { type: 'string', pattern: '^https://' },
+    viewports: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        required: ['name', 'width', 'height'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', pattern: '^[a-z][a-z0-9-]*$' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          deviceScaleFactor: { type: 'number' },
+          isMobile: { type: 'boolean' },
+          hasTouch: { type: 'boolean' },
+          userAgent: { type: 'string' },
+        },
+      },
+    },
     uiGlobs: { type: 'array', items: { type: 'string' }, minItems: 1 },
     env: { type: 'object', additionalProperties: { type: 'string' } },
     healthchecks: {
@@ -188,5 +237,18 @@ export function validateConfig(cfg) {
     }
   if (cfg.clock?.source === 'fixed' && typeof cfg.clock.fixedEpochMs !== 'number')
     errs.push('clock.fixedEpochMs required when clock.source=fixed');
+  if (cfg.publicBaseUrl !== undefined) {
+    if (typeof cfg.publicBaseUrl !== 'string' || !/^https:\/\/[^/]/.test(cfg.publicBaseUrl))
+      errs.push('publicBaseUrl must be an https:// URL');
+    else if (cfg.publicBaseUrl.endsWith('/'))
+      errs.push('publicBaseUrl must not end with a trailing slash');
+  }
+  if (cfg.viewports !== undefined) {
+    try {
+      normalizeViewports(cfg.viewports); // one validator for config and runtime
+    } catch (e) {
+      errs.push(e.message);
+    }
+  }
   return errs;
 }

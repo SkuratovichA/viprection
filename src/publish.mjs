@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { toolVersion, browserVersion } from './versions.mjs';
 import { writeRootIndex } from './index-pages.mjs';
+import { ensureNojekyll } from './github.mjs';
 
 function git(args, opts = {}) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim();
@@ -93,6 +94,10 @@ export async function publish({
 
   // (Re)generate a tiny cross-branch landing index.
   await writeCrossBranchIndex(wt, repo);
+
+  // Without .nojekyll a first branch-publish leaves Pages running Jekyll,
+  // which chokes on PNG-heavy pushes (msg-40 incident on message-flow #228).
+  await ensureNojekyll(wt);
 
   // Commit + push.
   git(['-C', wt, 'add', '-A']);

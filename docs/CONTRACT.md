@@ -1,4 +1,9 @@
-# viprection — the plug-and-play contract (v1, frozen)
+# viprection — the plug-and-play contract (v1.1)
+
+> v1.1 adds the **viewport matrix** (`viewports`, screen-key `@viewport`
+> suffixes) and **`publicBaseUrl`** (non-Pages hosting). Both are strictly
+> additive: a v1 config + manifest keeps working unchanged (implicit single
+> `desktop` viewport, Pages/raw URL resolution).
 
 This is the source of truth for what a project must provide to adopt the action.
 Everything app-specific lives in **one file** at the repo root:
@@ -59,9 +64,47 @@ comment, Pages publish, orchestration).
     "ignoreScreens": [],         // never-diffed screens
     "maskSelectors": {},         // screen|"*" → CSS selectors blanked before capture
     "ignoreRegions": []          // rectangles excluded at diff time
-  }
+  },
+
+  // v1.1 — the capture viewport matrix. The HARNESS iterates this list (read
+  // this config file directly; works both under the action and locally).
+  // Absent = legacy single desktop 1440x900@2. "desktop" is the reserved
+  // default name; its screen keys/files stay unsuffixed.
+  "viewports": [
+    { "name": "desktop", "width": 1440, "height": 900, "deviceScaleFactor": 2 },
+    { "name": "mobile",  "width": 390,  "height": 844, "deviceScaleFactor": 2,
+      "isMobile": true, "hasTouch": true }
+  ],
+
+  // v1.1 — where the previews branch is publicly served when NOT on GitHub
+  // Pages (e.g. an S3/CloudFront mirror). Priority for link/image URLs:
+  // publicBaseUrl > Pages detection > raw fallback (each fallback warns).
+  // If this URL sits behind auth, PR comments degrade from inline images to
+  // links (GitHub's camo proxy fetches anonymously).
+  "publicBaseUrl": "https://preview.dev.busano.cz"
 }
 ```
+
+## Screen identity — the key invariant (v1.1)
+
+A screen is `section/name` captured at a **viewport**. Canonical key:
+
+```
+section/name                ← the default viewport ("desktop")
+section/name@<viewport>     ← every other viewport (e.g. …@mobile)
+```
+
+- `@desktop` is **never emitted** — legacy manifests pair with new desktop
+  captures without migration; a screen captured only at one viewport shows up
+  as added/removed by plain key set-difference.
+- Viewport names are slugs (`^[a-z][a-z0-9-]*$`); `desktop` is reserved.
+- Files mirror keys: `section/03-users@mobile.png`. Flat (sanitized) names use
+  `__` for `/`: `section__03-users@mobile.diff.png`.
+- **All** key/filename construction and parsing goes through `src/schema.mjs`
+  (`screenKey`, `parseScreenKey`, `screenKeyToFilename`, `parseScreenFile`) —
+  never hand-rolled (two ad-hoc sanitizers diverged on '@' once already).
+- Per-entry ordering prefixes (`03-`) must be **per screen**, not per file, so
+  a second viewport never reindexes existing shots (that would flap every diff).
 
 ## Output contract (what `capture` MUST produce)
 
@@ -69,13 +112,23 @@ In `outputDir`:
 
 - **`manifest.json`** — the shared `GalleryManifest`:
   ```ts
-  { project, generatedAt, sections: [
+  { project, generatedAt,
+    viewports?: [{ name, width, height, deviceScaleFactor?,   // v1.1: echo of
+                   isMobile?, hasTouch?, userAgent? }],        // config at capture
+    sections: [
     { id, title, intro, backendNotes?, screens: [
       { name, route, caption, details?, role?, png, html?, status,
-        failureReason? } ] } ] }
+        failureReason?,
+        viewport? } ] } ] }                                    // v1.1: default "desktop"
   ```
+  One screen entry **per (screen × viewport)**; `viewport` names the matrix
+  entry it was captured at (absent = `desktop`, so v1 manifests are valid).
+  Renderers get the viewport list from the **head manifest** via
+  `manifestViewports()` — pr-diff threads it into the report.
 - the **PNG** files each screen references (`png` paths relative to `outputDir`).
 - (optional) per-screen self-contained **`.html`** snapshots (Figma import).
+  Emit HTML for the **desktop viewport only** — mobile HTML doubles the bloat
+  for no consumer; `html` is already an optional field.
 
 The action additionally reads/writes a **`preview-meta.json`** next to
 `manifest.json` (it does NOT modify the gallery renderer): `{ capturedAtSha,
