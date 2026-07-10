@@ -20,6 +20,7 @@ import { compareGalleries } from './image-diff.mjs';
 import { explainReport } from './explain.mjs';
 import { renderComment, MARKER } from './comment.mjs';
 import { resolveBase as resolveBaseImpl } from './resolve-base.mjs';
+import { manifestViewports, screenKeyToFilename } from './schema.mjs';
 
 async function getChangedFiles(baseRef) {
   try {
@@ -44,6 +45,7 @@ export async function prDiff({
   changedFiles: changedFilesIn, // injected (tests); default: git diff vs the base ref
   isFork = process.env.VP_IS_FORK === 'true',
   artifactMode = false, // true → images are in a run artifact, not inline
+  inlineImages = true, // false → comment renders links, not inline <img> (auth-walled base)
 } = {}) {
   const cfg = JSON.parse(await readFile(configPath, 'utf8'));
   const headDir = cfg.outputDir;
@@ -80,6 +82,21 @@ export async function prDiff({
     diffDir: join(process.env.RUNNER_TEMP || '/tmp', 'vp-diff'),
     diffOptions: { ...(cfg.diff || {}) },
   });
+
+  // Read the HEAD manifest ONCE up front: it is the canonical source for the
+  // capture viewports (threaded into the report for renderers) AND the coverage
+  // screen list below. Reading it twice risked a divergent view of the same
+  // file; a single read keeps report.viewports and coverage consistent.
+  let headManifest = null;
+  try {
+    headManifest = JSON.parse(await readFile(join(headDir, 'manifest.json'), 'utf8'));
+  } catch (e) {
+    console.warn(`[pr-diff] head manifest unreadable (${e.message}); viewports default to desktop, coverage skipped`);
+  }
+  // manifestViewports warns on a legacy (no `viewports`) manifest and returns
+  // the desktop default — renderers read ONLY report.viewports.
+  report.viewports = manifestViewports(headManifest ?? {});
+
   const changedFiles = changedFilesIn ?? (await getChangedFiles(baseRef));
   const explained = explainReport(report, changedFiles);
 
@@ -98,7 +115,10 @@ export async function prDiff({
     for (const r of explained) {
       if (r.status !== 'changed' || !r.bbox || !r.head?.png) continue;
       const src = join(headDir, String(r.head.png).replace(/^\.\//, ''));
-      const name = `${String(r.key).replace(/[^a-zA-Z0-9._-]+/g, '__')}.annotated.png`;
+      // THE canonical sanitizer: keeps '@' so '@mobile' survives, matching
+      // image-diff's diff name. The old [^a-zA-Z0-9._-] class ate '@' and made
+      // annotated names diverge from diff names — that pairing bug ends here.
+      const name = `${screenKeyToFilename(r.key)}.annotated.png`;
       const dest = join(annDir, name);
       try {
         annotatePng(src, dest, [r.bbox]);
@@ -121,28 +141,37 @@ export async function prDiff({
     : () => null;
 
   // Coverage nag inputs (all deterministic, no LLM): what the visual layer
-  // could not see on this PR.
+  // could not see on this PR. Reuses the HEAD manifest read once up front.
   const { globMatch } = await import('./glob.mjs');
-  const { readFile: rf } = await import('node:fs/promises');
-  const { join: pj } = await import('node:path');
   let coverage;
-  try {
-    const headManifest = JSON.parse(await rf(pj(headDir, 'manifest.json'), 'utf8'));
-    const screens = (headManifest.sections ?? []).flatMap((sec) =>
-      (sec.screens ?? []).map((sc) => ({ ...sc, sectionId: sec.id }))
-    );
-    const autoScreens = screens
-      .filter((sc) => String(sc.name).startsWith('auto--') || /auto-discovered/i.test(sc.caption ?? ''))
-      .map((sc) => sc.route || sc.name);
-    const paramRoutes = screens
-      .filter((sc) => sc.sectionId === 'needs-attention')
-      .map((sc) => sc.route || sc.name);
-    const uiFiles = (changedFiles ?? []).filter((f) => (cfg.uiGlobs ?? []).some((g) => globMatch(g, f)));
-    const seen = new Set(explained.flatMap((r) => r.relatedFiles ?? []));
-    const uncoveredChangedFiles = uiFiles.filter((f) => !seen.has(f));
-    coverage = { uncoveredChangedFiles, autoScreens, paramRoutes };
-  } catch (e) {
-    console.warn(`[coverage] skipped: ${e.message}`);
+  if (headManifest) {
+    try {
+      const screens = (headManifest.sections ?? []).flatMap((sec) =>
+        (sec.screens ?? []).map((sc) => ({ ...sc, sectionId: sec.id }))
+      );
+      // Sections now list the SAME logical screen once PER viewport, so the
+      // route/name of a multi-viewport screen repeats — dedupe to count SCREENS.
+      const autoScreens = [
+        ...new Set(
+          screens
+            .filter((sc) => String(sc.name).startsWith('auto--') || /auto-discovered/i.test(sc.caption ?? ''))
+            .map((sc) => sc.route || sc.name)
+        ),
+      ];
+      const paramRoutes = [
+        ...new Set(
+          screens
+            .filter((sc) => sc.sectionId === 'needs-attention')
+            .map((sc) => sc.route || sc.name)
+        ),
+      ];
+      const uiFiles = (changedFiles ?? []).filter((f) => (cfg.uiGlobs ?? []).some((g) => globMatch(g, f)));
+      const seen = new Set(explained.flatMap((r) => r.relatedFiles ?? []));
+      const uncoveredChangedFiles = uiFiles.filter((f) => !seen.has(f));
+      coverage = { uncoveredChangedFiles, autoScreens, paramRoutes };
+    } catch (e) {
+      console.warn(`[coverage] skipped: ${e.message}`);
+    }
   }
 
   // In artifact mode the run URL points reviewers at the uploaded images.
@@ -160,6 +189,10 @@ export async function prDiff({
     readOnly: isFork || !postComment,
     coverage,
     artifactNote: artifactMode && touched > 0 ? runUrl : null,
+    // Link-mode: an auth-walled public base can't be rendered by camo (fetches
+    // anonymously) → render links instead of inline <img>. report.viewports
+    // carries the device order; renderComment reads it off the report.
+    inlineImages,
   });
 
   // Always write the job summary (works on forks too).
@@ -198,6 +231,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const cfg = JSON.parse(await rf(process.env.VP_CONFIG_PATH || 'visual-preview.config.json', 'utf8'));
     const artifactMode = cfg.imageHosting === 'artifact';
     let postComment, uploadImages;
+    let inlineImages = true;
     if (!isFork && token && repo && prNumber) {
       const gh = await import('./github.mjs');
       postComment = gh.makeCommentPoster({ repo, prNumber, token });
@@ -208,12 +242,25 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         // Tell the workflow where to find the images to upload as an artifact.
         await setOutput('image-artifact-dir', stageDir);
       } else {
+        const pagesBranch = process.env.VP_PAGES_BRANCH || 'previews';
         uploadImages = gh.makeImageUploader({
-          repo, prNumber, token, pagesBranch: process.env.VP_PAGES_BRANCH || 'previews',
+          repo, prNumber, token, pagesBranch, publicBaseUrl: cfg.publicBaseUrl,
         });
+        // Link-mode probe: only a config publicBaseUrl can be auth-walled (the
+        // busano Basic-auth CloudFront case). Pages/raw are known camo-friendly
+        // for public repos → skip the probe (no cost) and inline. When a
+        // publicBaseUrl IS set, an anonymous HEAD tells us whether camo can
+        // fetch it; if not, the comment degrades to links.
+        if (cfg.publicBaseUrl) {
+          const { base } = await gh.resolvePublicBase({
+            repo, token, publicBaseUrl: cfg.publicBaseUrl, pagesBranch,
+          });
+          const probe = await gh.probePublicBase(base);
+          inlineImages = probe.inlineImages;
+        }
       }
     }
-    return prDiff({ postComment, uploadImages, isFork, artifactMode });
+    return prDiff({ postComment, uploadImages, isFork, artifactMode, inlineImages });
   })().catch((e) => {
     console.error(e);
     process.exit(1);

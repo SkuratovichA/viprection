@@ -29,6 +29,28 @@ async function gallery(dir, color, name = 'home') {
   await writeFile(join(dir, `01/${name}.png`), solidPng(40, 40, color));
 }
 
+// A viewport-matrix gallery: ONE logical auto-- screen captured at desktop AND
+// mobile. The manifest lists it once per viewport (desktop @section/name, mobile
+// @section/name@mobile) and echoes the `viewports` array. Coverage must count
+// the SCREEN once, not once per device row.
+async function matrixGallery(dir, color, name = 'auto--products') {
+  await mkdir(join(dir, '01'), { recursive: true });
+  const m = {
+    project: 'T', generatedAt: 'x',
+    viewports: [
+      { name: 'desktop', width: 1440, height: 900, deviceScaleFactor: 2 },
+      { name: 'mobile', width: 390, height: 844, deviceScaleFactor: 3, isMobile: true },
+    ],
+    sections: [{ id: '01', title: 'S', intro: '', screens: [
+      { name, route: `/${name}`, caption: name, png: `./01/${name}.png`, status: 'ok', viewport: 'desktop' },
+      { name, route: `/${name}`, caption: name, png: `./01/${name}@mobile.png`, status: 'ok', viewport: 'mobile' },
+    ] }],
+  };
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify(m));
+  await writeFile(join(dir, `01/${name}.png`), solidPng(40, 40, color));
+  await writeFile(join(dir, `01/${name}@mobile.png`), solidPng(20, 40, color));
+}
+
 test('prDiff posts a comment for same-repo with a changed screen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'vipr-pr-'));
   const baseDir = join(root, 'base');
@@ -195,4 +217,144 @@ test('coverage: every correlated file counts as covered — only truly unrelated
     assert.ok(!posted.includes(f), `${f} is correlated (beyond prose top-3) and must NOT be listed anywhere`);
   }
   assert.ok(posted.includes(related[0]), 'top correlated files still appear in the prose');
+});
+
+// ---------------------------------------------------------------------------
+// Viewport-matrix wiring (Task 2): the head manifest now lists the same logical
+// screen once PER viewport. Coverage must not double-count, and the report must
+// carry the capture viewports for renderers.
+// ---------------------------------------------------------------------------
+
+test('coverage: a desktop+mobile auto-- screen counts ONCE, not per viewport', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-pr6-'));
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  // Base has just the desktop image (a plain gallery of the same screen);
+  // head is the viewport-matrix gallery with a color change → the screen is
+  // "changed" but the coverage list is what we assert on.
+  await gallery(baseDir, [200, 0, 0], 'auto--products');
+  await matrixGallery(headDir, [0, 0, 200], 'auto--products');
+  await writeFile(join(root, 'cfg.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  process.env.RUNNER_TEMP = root;
+  process.env.GITHUB_STEP_SUMMARY = join(root, 'summary.md');
+  process.env.GITHUB_OUTPUT = join(root, 'out.txt');
+
+  let posted = null;
+  await prDiff({
+    configPath: join(root, 'cfg.json'),
+    resolveBase: async () => ({ mode: 'reuse', baseDir }),
+    postComment: async (md) => { posted = md; },
+    uploadImages: async () => (p) => `https://cdn/${p}`,
+    changedFiles: [],
+    isFork: false,
+  });
+
+  assert.ok(posted, 'comment should be posted');
+  // The dedup guard: the auto-covered-but-undocumented nag must COUNT the screen
+  // once (not once per viewport row). Assert on the coverage section only — the
+  // route also appears in per-screen titles/prose, which is unrelated to dedup.
+  assert.ok(posted.includes('**1 screen(s) are auto-covered'), 'autoScreens count is 1, not 2');
+  const cov = posted.slice(posted.indexOf('### 🧭 Coverage'));
+  const inCoverage = cov.split('`/auto--products`').length - 1;
+  assert.equal(inCoverage, 1, 'the auto-covered screen is listed once in the coverage nag, not per viewport');
+});
+
+test('report.viewports is populated from the head manifest (no legacy warn)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-pr7-'));
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  await gallery(baseDir, [200, 0, 0], 'auto--products');
+  await matrixGallery(headDir, [0, 0, 200], 'auto--products'); // has a `viewports` echo
+  await writeFile(join(root, 'cfg.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  process.env.RUNNER_TEMP = root;
+  process.env.GITHUB_STEP_SUMMARY = join(root, 'summary.md');
+  process.env.GITHUB_OUTPUT = join(root, 'out.txt');
+
+  // manifestViewports warns ONLY when the manifest has no `viewports` field.
+  // A matrix manifest carries one → report.viewports is sourced from it, no warn.
+  const warns = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    await prDiff({
+      configPath: join(root, 'cfg.json'),
+      resolveBase: async () => ({ mode: 'reuse', baseDir }),
+      postComment: async () => {},
+      uploadImages: async () => (p) => `https://cdn/${p}`,
+      changedFiles: [],
+      isFork: false,
+    });
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.ok(
+    !warns.some((w) => w.includes('manifest has no `viewports`')),
+    'a manifest that echoes viewports must NOT trigger the legacy desktop fallback'
+  );
+
+  // Complement: a legacy manifest (no viewports) DOES warn → report.viewports
+  // falls back to the desktop default, proving the threading reads the manifest.
+  const headDir2 = join(root, 'head2');
+  await gallery(headDir2, [0, 0, 200], 'home'); // plain manifest(), no viewports
+  await writeFile(join(root, 'cfg2.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir2,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  const warns2 = [];
+  console.warn = (...a) => warns2.push(a.join(' '));
+  try {
+    await prDiff({
+      configPath: join(root, 'cfg2.json'),
+      resolveBase: async () => ({ mode: 'reuse', baseDir }),
+      postComment: async () => {},
+      uploadImages: async () => (p) => `https://cdn/${p}`,
+      changedFiles: [],
+      isFork: false,
+    });
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.ok(
+    warns2.some((w) => w.includes('manifest has no `viewports`')),
+    'a legacy manifest must trigger the desktop-default fallback (report.viewports came from the manifest read)'
+  );
+});
+
+test('inlineImages=false still renders a full comment (link-mode path)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'vipr-pr8-'));
+  const baseDir = join(root, 'base');
+  const headDir = join(root, 'head');
+  await gallery(baseDir, [200, 0, 0]);
+  await gallery(headDir, [0, 0, 200]); // changed
+  await writeFile(join(root, 'cfg.json'), JSON.stringify({
+    up: 'x', capture: 'x', down: 'x', outputDir: headDir,
+    healthchecks: ['http://x'], uiGlobs: ['**'],
+    diff: { changedRatioGate: 0.001, htmlPrefilter: false },
+  }));
+  process.env.RUNNER_TEMP = root;
+  process.env.GITHUB_STEP_SUMMARY = join(root, 'summary.md');
+  process.env.GITHUB_OUTPUT = join(root, 'out.txt');
+
+  let posted = null;
+  await prDiff({
+    configPath: join(root, 'cfg.json'),
+    resolveBase: async () => ({ mode: 'reuse', baseDir }),
+    postComment: async (md) => { posted = md; },
+    uploadImages: async () => (p) => `https://cdn/${p}`,
+    changedFiles: [],
+    isFork: false,
+    inlineImages: false,
+  });
+
+  assert.ok(posted, 'link-mode still posts a comment');
+  assert.ok(posted.includes('1 changed'), 'the change summary still renders in link mode');
 });

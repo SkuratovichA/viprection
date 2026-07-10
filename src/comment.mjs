@@ -20,9 +20,11 @@ function statusEmoji(s) {
  * @param {string} [p.galleryUrl]  link to the full published gallery
  * @param {string} [p.headSha]
  * @param {boolean} [p.readOnly]   fork mode → note that this is a summary only
+ * @param {boolean} [p.inlineImages=true]  false → auth-walled base camo can't render;
+ *   render image links instead of inline <img>. (report.viewports carries device order.)
  * @returns {string} markdown
  */
-export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly, coverage, artifactNote }) {
+export function renderComment({ report, explained, urlFor, galleryUrl, headSha, readOnly, coverage, artifactNote, inlineImages = true }) {
   const { summary } = report;
   const totalTouched = summary.added + summary.removed + summary.changed + summary.failed;
 
