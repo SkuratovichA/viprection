@@ -127,8 +127,10 @@ In `outputDir`:
   `manifestViewports()` — pr-diff threads it into the report.
 - the **PNG** files each screen references (`png` paths relative to `outputDir`).
 - (optional) per-screen self-contained **`.html`** snapshots (Figma import).
-  Emit HTML for the **desktop viewport only** — mobile HTML doubles the bloat
-  for no consumer; `html` is already an optional field.
+  Emit them per **(screen × viewport)** when the gallery should offer the
+  HTML preview on every device tab (the mobile DOM genuinely differs —
+  drawers, bottom nav). Desktop-only is a valid slimming choice; renderers
+  treat `html` as optional per entry either way.
 
 The action additionally reads/writes a **`preview-meta.json`** next to
 `manifest.json` (it does NOT modify the gallery renderer): `{ capturedAtSha,
