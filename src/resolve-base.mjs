@@ -6,11 +6,15 @@
  *   1. `preview-meta.json` exists next to its manifest and parses, AND
  *   2. its tool + browser versions match the current environment (a renderer
  *      or capture-tool bump invalidates pixel comparability), AND
- *   3. its `capturedAtSha` equals the PR's merge-base, OR is an ancestor of
- *      the merge-base with NO UI-affecting files changed in between
- *      (`git diff --name-only capturedAtSha..mergeBaseSha` vs `uiGlobs`) —
- *      the change-gate skips non-UI commits, so a "stale" SHA is often still
- *      visually identical to the merge-base.
+ *   3. its `capturedAtSha` equals the PR's merge-base, OR sits on the same
+ *      first-parent line (ancestor OR descendant of the merge-base) with NO
+ *      UI-affecting files changed in between (`git diff --name-only` over the
+ *      connecting range vs `uiGlobs`). Ancestor = the published gallery lags
+ *      the merge-base (non-UI commits landed since it was captured).
+ *      Descendant = the base branch moved PAST the merge-base after the PR
+ *      branched (the common case on a busy base branch) — if nothing
+ *      UI-affecting landed in merge-base..capturedAtSha, the newer gallery is
+ *      still pixel-identical to what a merge-base capture would produce.
  *
  * Contract (the pr-diff seam):
  *   in : { config, mergeBaseSha, publishedMetaPath, publishedDir, freshBaseDir }
@@ -139,25 +143,32 @@ export async function resolveBase({
   }
 
   try {
-    if (!isAncestor(meta.capturedAtSha, mergeBaseSha, repoDir)) {
+    const captured = meta.capturedAtSha;
+    const relation = isAncestor(captured, mergeBaseSha, repoDir)
+      ? 'ancestor'
+      : isAncestor(mergeBaseSha, captured, repoDir)
+        ? 'descendant'
+        : null;
+    if (!relation) {
       return {
         mode: 'capture-base',
         baseDir: freshBaseDir,
-        reason: `published capture ${meta.capturedAtSha.slice(0, 10)} is not an ancestor of merge-base`,
+        reason: `published capture ${captured.slice(0, 10)} and the merge-base have diverged`,
       };
     }
-    const files = changedFiles(meta.capturedAtSha, mergeBaseSha, repoDir);
+    const [from, to] = relation === 'ancestor' ? [captured, mergeBaseSha] : [mergeBaseSha, captured];
+    const files = changedFiles(from, to, repoDir);
     if (touchesUiGlobs(files, config.uiGlobs ?? [])) {
       return {
         mode: 'capture-base',
         baseDir: freshBaseDir,
-        reason: `UI-affecting changes between published capture and merge-base (${files.length} files)`,
+        reason: `UI-affecting changes between ${relation === 'ancestor' ? 'published capture and merge-base' : 'merge-base and published capture'} (${files.length} files)`,
       };
     }
     return {
       mode: 'reuse',
       baseDir: publishedDir,
-      reason: `published capture is an ancestor with no UI-affecting changes (${files.length} non-UI files)`,
+      reason: `published capture is ${relation === 'ancestor' ? 'an ancestor' : 'a descendant'} of the merge-base with no UI-affecting changes (${files.length} non-UI files)`,
     };
   } catch (e) {
     // Any git hiccup (shallow clone missing the SHA, etc.) degrades to the safe answer.

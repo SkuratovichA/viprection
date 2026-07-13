@@ -116,9 +116,23 @@ test('ancestor with UI changes in between → capture-base', async () => {
   assert.match(r.reason, /UI-affecting/);
 });
 
-test('non-ancestor (diverged) published SHA → capture-base', async () => {
+test('descendant with only non-UI changes in between → reuse', async () => {
   const repo = await makeRepo();
-  // published at c3, merge-base c1: c3 is NOT an ancestor of c1
+  // published at c2 (base branch moved past the merge-base), merge-base c1:
+  // only README.md landed in c1..c2 → the newer gallery is still pixel-valid.
+  const meta = await writeMeta(repo.dir, {
+    capturedAtSha: repo.c2,
+    toolVersion: VERSIONS.tool,
+    browserVersion: VERSIONS.browser,
+  });
+  const r = await resolveBase({ ...baseArgs(repo, meta), mergeBaseSha: repo.c1 });
+  assert.equal(r.mode, 'reuse');
+  assert.match(r.reason, /descendant.*no UI-affecting/);
+});
+
+test('descendant with UI changes in between → capture-base', async () => {
+  const repo = await makeRepo();
+  // published at c3, merge-base c1: ui/a.txt changed in c1..c3 → must re-capture
   const meta = await writeMeta(repo.dir, {
     capturedAtSha: repo.c3,
     toolVersion: VERSIONS.tool,
@@ -126,7 +140,25 @@ test('non-ancestor (diverged) published SHA → capture-base', async () => {
   });
   const r = await resolveBase({ ...baseArgs(repo, meta), mergeBaseSha: repo.c1 });
   assert.equal(r.mode, 'capture-base');
-  assert.match(r.reason, /not an ancestor/);
+  assert.match(r.reason, /UI-affecting/);
+});
+
+test('truly diverged published SHA → capture-base', async () => {
+  const repo = await makeRepo();
+  // A side branch off c1: its tip is neither ancestor nor descendant of c3.
+  git(repo.dir, 'checkout', '-q', '-b', 'side', repo.c1);
+  await writeFile(join(repo.dir, 'side.md'), 'side');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-qm', 'side');
+  const side = git(repo.dir, 'rev-parse', 'HEAD');
+  const meta = await writeMeta(repo.dir, {
+    capturedAtSha: side,
+    toolVersion: VERSIONS.tool,
+    browserVersion: VERSIONS.browser,
+  });
+  const r = await resolveBase({ ...baseArgs(repo, meta), mergeBaseSha: repo.c3 });
+  assert.equal(r.mode, 'capture-base');
+  assert.match(r.reason, /diverged/);
 });
 
 test('unknown SHA in meta degrades safely → capture-base', async () => {
