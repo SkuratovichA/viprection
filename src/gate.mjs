@@ -8,10 +8,17 @@
  *
  * Env:
  *   VP_CONFIG_PATH  path to visual-preview.config.json
- *   VP_MODE         branch | pr
+ *   VP_MODE         branch | pr | gate
  *   GITHUB_OUTPUT   (provided by Actions) — where outputs are written
  *   GITHUB_BASE_REF (pr)  base branch
  *   GITHUB_EVENT_NAME
+ *
+ * `gate` is the standalone cheap-probe mode: a consumer runs the action with
+ * mode: gate in a tiny job (checkout + this script, no pnpm/Playwright/stack)
+ * and conditions its heavy job on the `should-run` output — so a docs-only PR
+ * never pays for browser downloads or dependency installs. The decision is
+ * derived from the event: pull_request → the same uiGlobs diff-gate as `pr`;
+ * anything else (push) → always run, same as `branch`.
  */
 import { readFile, appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
@@ -42,12 +49,16 @@ async function main() {
     process.exit(1);
   }
 
+  // In standalone gate mode the pr-vs-branch semantics follow the event.
+  const effectiveMode =
+    mode === 'gate' ? (process.env.GITHUB_EVENT_NAME === 'pull_request' ? 'pr' : 'branch') : mode;
+
   // Branch mode ALWAYS runs: the per-branch gallery is the source-of-truth
   // baseline (and the PR diff base). Gating it on "this commit touched UI" would
   // let the baseline go stale — or, worse, never get created (a CI-only commit
   // like adopting the workflow wouldn't publish, so no baseline ever exists).
   // The uiGlob gate exists to skip pointless PR *diffs*, not branch publishes.
-  if (mode !== 'pr') {
+  if (effectiveMode !== 'pr') {
     console.log('visual-preview: branch mode → always publishing the gallery.');
     await setOutput('should-run', 'true');
     return;

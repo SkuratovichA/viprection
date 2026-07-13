@@ -23,6 +23,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---- Cheap probe FIRST: does this PR touch anything visual at all? ----
+  # Runs the action in gate mode — checkout + one node script, no pnpm, no
+  # Playwright, no app boot. The heavy pr-diff job below is skipped entirely
+  # (toolchain setup included) when nothing UI-affecting changed.
+  gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      should-run: ${{ steps.vp.outputs.should-run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: booses/visual-preview-action@v1 # ← pin a tag/SHA once published
+        id: vp
+        with:
+          mode: gate
+
   # ---- The build MUST pass before we spend time rendering. ----
   build:
     runs-on: ubuntu-24.04
@@ -47,8 +66,8 @@ jobs:
           mode: branch
 
   pr-diff:
-    needs: build
-    if: github.event_name == 'pull_request'
+    needs: [gate, build]
+    if: github.event_name == 'pull_request' && needs.gate.outputs.should-run == 'true'
     runs-on: ubuntu-24.04
     permissions:
       # write: the diff job pushes before/after/diff images to the previews

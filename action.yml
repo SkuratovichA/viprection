@@ -14,7 +14,12 @@ inputs:
     required: false
     default: 'visual-preview.config.json'
   mode:
-    description: 'branch | pr — branch: (re)publish the per-branch gallery. pr: diff head vs base and comment.'
+    description: >-
+      branch | pr | gate — branch: (re)publish the per-branch gallery. pr: diff
+      head vs base and comment. gate: cheap standalone probe — validate the
+      config and emit the should-run output WITHOUT booting anything; run it in
+      a tiny job (checkout only, no pnpm/Playwright) and condition the heavy
+      job on it, so non-UI PRs never pay for toolchain setup.
     required: true
   pages-branch:
     description: 'Orphan branch to publish galleries to'
@@ -41,6 +46,11 @@ inputs:
     default: ${{ github.token }}
 
 outputs:
+  should-run:
+    description: >-
+      Whether the changed files warrant a capture run (gate mode's whole
+      purpose; also emitted in branch/pr modes). "true" | "false".
+    value: ${{ steps.gate.outputs.should-run }}
   changed-count:
     description: 'Number of screens that changed (pr mode)'
     value: ${{ steps.diff.outputs.changed-count }}
@@ -86,7 +96,8 @@ runs:
         VP_CAPTURE_BASE_FALLBACK: ${{ inputs.capture-base-fallback }}
 
     # 3. Bring the app up (project's `up`), wait for healthchecks.
-    - if: steps.gate.outputs.should-run == 'true'
+    #    (gate mode stops after step 1 — it only answers should-run.)
+    - if: inputs.mode != 'gate' && steps.gate.outputs.should-run == 'true'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/stack.mjs" up
       env:
@@ -94,14 +105,14 @@ runs:
 
     # 4. Seed + capture the HEAD catalog (with the frozen clock epoch from
     #    prepare-base, inherited via $GITHUB_ENV, if enabled).
-    - if: steps.gate.outputs.should-run == 'true'
+    - if: inputs.mode != 'gate' && steps.gate.outputs.should-run == 'true'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/capture.mjs" head
       env:
         VP_CONFIG_PATH: ${{ inputs.config-path }}
 
     # 5. Tear the stack down (always) — diff/publish only need the files.
-    - if: always() && steps.gate.outputs.should-run == 'true'
+    - if: always() && inputs.mode != 'gate' && steps.gate.outputs.should-run == 'true'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/stack.mjs" down
       env:

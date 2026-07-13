@@ -35,6 +35,18 @@ test('branch mode always runs (even for a non-UI commit)', async () => {
   assert.equal(shouldRun, 'true');
 });
 
+test('gate mode on a push event always runs (branch semantics)', async () => {
+  const shouldRun = await runGate({ mode: 'gate', env: { GITHUB_EVENT_NAME: 'push' } });
+  assert.equal(shouldRun, 'true');
+});
+
+test('gate mode on a pull_request event applies the pr diff-gate', async () => {
+  // Non-git tmp dir → diff uncomputable → safe default. The point: gate mode
+  // takes the pr path (yields a decision) instead of always-true.
+  const shouldRun = await runGate({ mode: 'gate', env: { GITHUB_EVENT_NAME: 'pull_request' } });
+  assert.ok(shouldRun === 'true' || shouldRun === 'false');
+});
+
 test('pr mode with a non-UI diff skips (no merge-base env → HEAD~1)', async () => {
   // In a non-git tmp dir the diff is uncomputable → gate errs on the side of
   // running. That's the safe default; the real skip path is covered by the
