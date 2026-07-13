@@ -36,6 +36,11 @@ comment, Pages publish, orchestration).
   "seed": "pnpm --filter @app/server seed",        // optional
   "capture": "pnpm --filter @app/client capture:screens",
   "down": "docker compose -f docker-compose.preview.yml down -v",
+  // Optional but STRONGLY recommended: print the stack's boot output. Run by
+  // the action when a healthcheck times out (head and base lifecycles alike).
+  // A self-backgrounding `up` hides its stderr in a file — without this hook a
+  // boot failure shows up only as "healthcheck timed out", with no cause.
+  "logs": "tail -n 200 \"${RUNNER_TEMP:-/tmp}/visual-preview-stack.log\"",
 
   // Where `capture` writes manifest.json + PNGs (the action's input contract).
   "outputDir": "viprection/app-screens",
@@ -168,9 +173,12 @@ To avoid capturing the whole catalog twice per PR, the published per-branch
 gallery is reused as the diff **base** when it is still valid:
 
 1. `preview-meta.capturedAtSha == merge-base` → **reuse**.
-2. `capturedAtSha` is an ancestor of merge-base **and**
-   `git diff capturedAtSha..merge-base` touches no `uiGlobs` → **reuse**
-   (covers the common case where non-UI commits advanced the branch).
+2. `capturedAtSha` is an ancestor **or a descendant** of the merge-base **and**
+   the `git diff` over the connecting range touches no `uiGlobs` → **reuse**.
+   Ancestor covers non-UI commits advancing the branch since the capture;
+   descendant covers the base branch moving PAST the merge-base after the PR
+   branched (the common case on a busy base branch) — either way the published
+   gallery is pixel-identical to what a merge-base capture would produce.
 3. `toolVersion` / `browserVersion` mismatch → **fresh** base capture.
 4. otherwise → **fresh** base capture (a fallback, not an error).
 
@@ -179,6 +187,13 @@ A **fresh base capture** happens in a `git worktree` pinned at the merge-base:
 (always), with the SAME `CAPTURE_FROZEN_EPOCH_MS` the head capture gets. It can
 be disabled with the `capture-base-fallback: 'false'` action input — the run
 then establishes a new baseline instead of diffing.
+
+⚠️ The worktree is a FRESH checkout: no `node_modules`, no generated clients.
+If your `up`/`capture` need dependencies (they almost certainly do), configure
+`install` — without it the base stack dies instantly and the healthcheck polls
+a dead port until timeout. Playwright browsers in `~/.cache/ms-playwright` are
+shared with the head checkout, so `install` normally does NOT need a browser
+download — dependencies + codegen (e.g. `prisma generate`) suffice.
 
 ## Security model
 

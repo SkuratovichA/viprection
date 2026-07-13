@@ -27,6 +27,13 @@
  * @property {string} [seed]         Optional: seed data once healthy.
  * @property {string} capture        Command writing outputDir/manifest.json + PNGs.
  * @property {string} down           Teardown; ALWAYS run (even on failure).
+ * @property {string} [logs]         Optional: print the stack's boot output —
+ *                                   run by the action when a healthcheck times
+ *                                   out (head AND base lifecycles). A stack's
+ *                                   `up` typically backgrounds itself into a
+ *                                   log file, so without this hook a boot
+ *                                   failure is invisible in the job log. e.g.
+ *                                   `tail -n 200 "$RUNNER_TEMP/stack.log"`.
  * @property {string} outputDir      Where capture writes (repo-relative).
  * @property {(string|HealthCheck)[]} healthchecks  URLs polled until healthy
  *                                   before seed/capture. A bare string = GET that
@@ -126,6 +133,7 @@ export const CONFIG_JSON_SCHEMA = {
     seed: { type: 'string' },
     capture: { type: 'string' },
     down: { type: 'string' },
+    logs: { type: 'string' },
     outputDir: { type: 'string' },
     nodeVersion: { type: 'string' },
     // Where PR-comment diff images are hosted. "pages" (default): push to the

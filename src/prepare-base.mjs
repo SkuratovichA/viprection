@@ -43,7 +43,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveBase } from './resolve-base.mjs';
-import { run, waitForHealth } from './stack.mjs';
+import { run, waitForHealth, dumpLogs } from './stack.mjs';
 
 function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -167,6 +167,14 @@ export async function captureBaseInWorktree({
     if (cfg.install) {
       console.log(`[prepare-base] base install: ${cfg.install}`);
       await inWorktree(cfg.install);
+    } else {
+      // The #1 capture-base footgun: the worktree is a FRESH checkout — no
+      // node_modules, no generated clients. Without an install command the
+      // project's `up` usually dies instantly and the healthcheck polls a dead
+      // port until timeout. Warn up front so the log names the likely culprit.
+      console.warn(
+        '[prepare-base] no `install` command in config — the merge-base worktree has NO node_modules; if the base stack fails to boot, add one (e.g. "pnpm install --frozen-lockfile")'
+      );
     }
     console.log(`[prepare-base] base up: ${cfg.up}`);
     await inWorktree(cfg.up);
@@ -181,6 +189,9 @@ export async function captureBaseInWorktree({
     }
     console.log(`[prepare-base] base capture: ${cfg.capture}`);
     await inWorktree(cfg.capture);
+  } catch (e) {
+    await dumpLogs(cfg, { cwd: worktreeDir });
+    throw e;
   } finally {
     if (cfg.down) {
       await inWorktree(cfg.down).catch((e) =>

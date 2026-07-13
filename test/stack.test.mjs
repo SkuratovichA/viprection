@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run, up } from '../src/stack.mjs';
@@ -46,6 +46,21 @@ test('up fails when a healthcheck never becomes ready', async () => {
   }));
   process.env.VP_CONFIG_PATH = cfgPath;
   await assert.rejects(() => up(), /healthcheck timed out/);
+});
+
+test('up runs the `logs` command when a healthcheck times out', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vipr-stk3-'));
+  const cfgPath = join(dir, 'cfg.json');
+  const marker = join(dir, 'logs-ran.txt');
+  await writeFile(cfgPath, JSON.stringify({
+    up: 'true', capture: 'x', down: 'true', outputDir: dir, uiGlobs: ['**'],
+    logs: `echo boot-post-mortem > "${marker}"`,
+    healthchecks: [{ url: 'http://127.0.0.1:1/nope', timeoutSec: 1 }],
+  }));
+  process.env.VP_CONFIG_PATH = cfgPath;
+  await assert.rejects(() => up(), /healthcheck timed out/); // still the original error
+  const dumped = await readFile(marker, 'utf8');
+  assert.match(dumped, /boot-post-mortem/);
 });
 
 test('resolveFrozenEpoch: off when freeze not set, fixed when configured', () => {

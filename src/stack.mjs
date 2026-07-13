@@ -143,6 +143,24 @@ export async function waitForHealth(hcRaw) {
   throw new Error(`healthcheck timed out: ${hc.url} (${lastErr})`);
 }
 
+/**
+ * Run the project's optional `logs` command — the boot post-mortem. A stack's
+ * `up` typically backgrounds itself and redirects output to a file, so when a
+ * healthcheck times out the job log holds no clue WHY; `logs` is the project's
+ * "show me the boot output" hook (e.g. `tail -n 200 "$RUNNER_TEMP/stack.log"`).
+ * Best-effort: a broken logs command must never mask the original failure.
+ */
+export async function dumpLogs(cfg, { cwd } = {}) {
+  if (!cfg?.logs) {
+    console.warn('[stack] no `logs` command in config — add one to see WHY the stack failed to boot');
+    return;
+  }
+  console.error(`[stack] boot diagnostics: ${cfg.logs}`);
+  await run(cfg.logs, cfg.env ?? {}, { cwd }).catch((e) =>
+    console.warn(`[stack] logs command failed: ${e.message}`)
+  );
+}
+
 export async function up() {
   const cfg = await loadConfig();
   const env = cfg.env ?? {};
@@ -152,14 +170,19 @@ export async function up() {
 
   const checks = cfg.healthchecks ?? [];
   console.log(`[stack] waiting for ${checks.length} healthcheck(s)…`);
-  // Poll all in parallel; fail fast if any times out.
-  await Promise.all(
-    checks.map(async (hc) => {
-      const n = normalizeHealthcheck(hc);
-      await waitForHealth(hc);
-      console.log(`[stack] healthy: ${n.url}`);
-    })
-  );
+  try {
+    // Poll all in parallel; fail fast if any times out.
+    await Promise.all(
+      checks.map(async (hc) => {
+        const n = normalizeHealthcheck(hc);
+        await waitForHealth(hc);
+        console.log(`[stack] healthy: ${n.url}`);
+      })
+    );
+  } catch (e) {
+    await dumpLogs(cfg);
+    throw e;
+  }
   console.log('[stack] all healthchecks green.');
 }
 
